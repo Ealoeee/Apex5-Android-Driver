@@ -19,8 +19,11 @@
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
-static constexpr uint32_t PKT_MAGIC = 0x41505835u; // 'APX5'
+static constexpr uint32_t PKT_MAGIC = 0x41505835u;   // 'APX5'
+static constexpr uint32_t TOUCH_MAGIC = 0x41505435u; // 'APT5'
 static constexpr int MAX_FF_EFFECTS = 16;
+static constexpr int MAX_TOUCH_SLOTS = 10;
+static constexpr int TOUCH_MAX_COORD = 10000;
 
 struct __attribute__((packed)) GamepadReportPacket {
     uint32_t magic;
@@ -36,6 +39,20 @@ struct __attribute__((packed)) GamepadReportPacket {
     int16_t rx;
     int16_t ry;
     uint32_t seq;
+};
+
+struct __attribute__((packed)) TouchSlotState {
+    uint8_t active;
+    uint8_t slotId;
+    int16_t x;
+    int16_t y;
+};
+
+struct __attribute__((packed)) TouchFramePacket {
+    uint32_t magic;
+    uint8_t slotCount;
+    uint8_t reserved[3];
+    TouchSlotState slots[MAX_TOUCH_SLOTS];
 };
 
 struct __attribute__((packed)) RumblePacket {
@@ -58,11 +75,21 @@ struct GamepadState {
     int16_t ry = 0;
 };
 
+struct TouchRuntimeState {
+    bool active[MAX_TOUCH_SLOTS] = {};
+    int16_t x[MAX_TOUCH_SLOTS] = {};
+    int16_t y[MAX_TOUCH_SLOTS] = {};
+    int32_t nextTrackingId = 1;
+    int activeCount = 0;
+};
+
 static std::mutex g_sessionMutex;
 static std::atomic<bool> g_running{false};
 static int g_uinputFd = -1;
 static int g_extraFd = -1;
+static int g_touchFd = -1;
 static int g_stateReadFd = -1;
+static int g_touchReadFd = -1;
 static int g_rumbleWriteFd = -1;
 static int g_stopEventFd = -1;
 static bool g_ffEnabled = false;
@@ -197,7 +224,75 @@ static int createExtraKeysUinput(std::string &errOut) {
     return fd;
 }
 
+static int createTouchscreenUinput(std::string &errOut) {
+    int fd = open("/dev/uinput", O_WRONLY | O_NONBLOCK);
+    if (fd < 0) {
+        errOut = std::string("open(/dev/uinput) touch failed: ") + strerror(errno);
+        return -1;
+    }
+
+    auto fail = [&](const char *step) -> int {
+        errOut = std::string(step) + " (touch) failed: " + strerror(errno);
+        close(fd);
+        return -1;
+    };
+
+    if (ioctl(fd, UI_SET_EVBIT, EV_SYN) < 0) return fail("UI_SET_EVBIT EV_SYN");
+    if (ioctl(fd, UI_SET_EVBIT, EV_KEY) < 0) return fail("UI_SET_EVBIT EV_KEY");
+    if (ioctl(fd, UI_SET_EVBIT, EV_ABS) < 0) return fail("UI_SET_EVBIT EV_ABS");
+    if (ioctl(fd, UI_SET_KEYBIT, BTN_TOUCH) < 0) return fail("UI_SET_KEYBIT BTN_TOUCH");
+
+#ifdef UI_SET_PROPBIT
+    if (ioctl(fd, UI_SET_PROPBIT, INPUT_PROP_DIRECT) < 0) {
+        return fail("UI_SET_PROPBIT INPUT_PROP_DIRECT");
+    }
+#endif
+
+    const int mtAxes[] = {
+        ABS_MT_SLOT,
+        ABS_MT_TRACKING_ID,
+        ABS_MT_POSITION_X,
+        ABS_MT_POSITION_Y,
+        ABS_MT_TOUCH_MAJOR,
+        ABS_MT_PRESSURE
+    };
+    for (int a : mtAxes) {
+        if (ioctl(fd, UI_SET_ABSBIT, a) < 0) return fail("UI_SET_ABSBIT MT");
+    }
+
+    struct uinput_user_dev uidev;
+    memset(&uidev, 0, sizeof(uidev));
+    snprintf(uidev.name, UINPUT_MAX_NAME_SIZE, "Apex 5 Virtual Touchscreen");
+    uidev.id.bustype = BUS_VIRTUAL;
+    uidev.id.vendor = 0x37d7;
+    uidev.id.product = 0x2510;
+    uidev.id.version = 0x0100;
+
+    uidev.absmin[ABS_MT_SLOT] = 0;
+    uidev.absmax[ABS_MT_SLOT] = MAX_TOUCH_SLOTS - 1;
+    uidev.absmin[ABS_MT_TRACKING_ID] = 0;
+    uidev.absmax[ABS_MT_TRACKING_ID] = 65535;
+    uidev.absmin[ABS_MT_POSITION_X] = 0;
+    uidev.absmax[ABS_MT_POSITION_X] = TOUCH_MAX_COORD;
+    uidev.absmin[ABS_MT_POSITION_Y] = 0;
+    uidev.absmax[ABS_MT_POSITION_Y] = TOUCH_MAX_COORD;
+    uidev.absmin[ABS_MT_TOUCH_MAJOR] = 0;
+    uidev.absmax[ABS_MT_TOUCH_MAJOR] = 255;
+    uidev.absmin[ABS_MT_PRESSURE] = 0;
+    uidev.absmax[ABS_MT_PRESSURE] = 255;
+
+    if (write(fd, &uidev, sizeof(uidev)) != sizeof(uidev)) {
+        return fail("write(uinput_user_dev) touch");
+    }
+    if (ioctl(fd, UI_DEV_CREATE) < 0) {
+        return fail("UI_DEV_CREATE touch");
+    }
+    return fd;
+}
+
 static void applyGamepadState(const GamepadReportPacket &pkt, GamepadState &prev) {
+    if (g_uinputFd < 0) return;
+
     const uint16_t keyCodes[11] = {
         BTN_SOUTH,  // bit 0: A
         BTN_EAST,   // bit 1: B
@@ -251,97 +346,220 @@ static void applyGamepadState(const GamepadReportPacket &pkt, GamepadState &prev
     }
 }
 
+static void applyTouchState(const TouchFramePacket &pkt, TouchRuntimeState &prev) {
+    if (g_touchFd < 0) return;
+
+    bool wantActive[MAX_TOUCH_SLOTS] = {};
+    int16_t wantX[MAX_TOUCH_SLOTS] = {};
+    int16_t wantY[MAX_TOUCH_SLOTS] = {};
+
+    int count = pkt.slotCount;
+    if (count > MAX_TOUCH_SLOTS) count = MAX_TOUCH_SLOTS;
+
+    int nextCount = 0;
+    for (int i = 0; i < count; ++i) {
+        const TouchSlotState &s = pkt.slots[i];
+        if (s.active && s.slotId < MAX_TOUCH_SLOTS) {
+            uint8_t idx = s.slotId;
+            if (!wantActive[idx]) {
+                nextCount++;
+            }
+            wantActive[idx] = true;
+            int16_t cx = s.x;
+            int16_t cy = s.y;
+            if (cx < 0) cx = 0;
+            if (cx > TOUCH_MAX_COORD) cx = TOUCH_MAX_COORD;
+            if (cy < 0) cy = 0;
+            if (cy > TOUCH_MAX_COORD) cy = TOUCH_MAX_COORD;
+            wantX[idx] = cx;
+            wantY[idx] = cy;
+        }
+    }
+
+    bool dirty = false;
+
+    if (prev.activeCount == 0 && nextCount > 0) {
+        emitEvent(g_touchFd, EV_KEY, BTN_TOUCH, 1);
+        dirty = true;
+    }
+
+    for (int slot = 0; slot < MAX_TOUCH_SLOTS; ++slot) {
+        if (wantActive[slot] && !prev.active[slot]) {
+            int32_t tid = prev.nextTrackingId++;
+            if (prev.nextTrackingId > 65000) prev.nextTrackingId = 1;
+
+            emitEvent(g_touchFd, EV_ABS, ABS_MT_SLOT, slot);
+            emitEvent(g_touchFd, EV_ABS, ABS_MT_TRACKING_ID, tid);
+            emitEvent(g_touchFd, EV_ABS, ABS_MT_POSITION_X, wantX[slot]);
+            emitEvent(g_touchFd, EV_ABS, ABS_MT_POSITION_Y, wantY[slot]);
+            emitEvent(g_touchFd, EV_ABS, ABS_MT_TOUCH_MAJOR, 16);
+            emitEvent(g_touchFd, EV_ABS, ABS_MT_PRESSURE, 64);
+
+            prev.active[slot] = true;
+            prev.x[slot] = wantX[slot];
+            prev.y[slot] = wantY[slot];
+            dirty = true;
+        } else if (wantActive[slot] && prev.active[slot]) {
+            if (wantX[slot] != prev.x[slot] || wantY[slot] != prev.y[slot]) {
+                emitEvent(g_touchFd, EV_ABS, ABS_MT_SLOT, slot);
+                if (wantX[slot] != prev.x[slot]) {
+                    emitEvent(g_touchFd, EV_ABS, ABS_MT_POSITION_X, wantX[slot]);
+                    prev.x[slot] = wantX[slot];
+                }
+                if (wantY[slot] != prev.y[slot]) {
+                    emitEvent(g_touchFd, EV_ABS, ABS_MT_POSITION_Y, wantY[slot]);
+                    prev.y[slot] = wantY[slot];
+                }
+                dirty = true;
+            }
+        } else if (!wantActive[slot] && prev.active[slot]) {
+            emitEvent(g_touchFd, EV_ABS, ABS_MT_SLOT, slot);
+            emitEvent(g_touchFd, EV_ABS, ABS_MT_TRACKING_ID, -1);
+            prev.active[slot] = false;
+            dirty = true;
+        }
+    }
+
+    if (prev.activeCount > 0 && nextCount == 0) {
+        emitEvent(g_touchFd, EV_KEY, BTN_TOUCH, 0);
+        dirty = true;
+    }
+
+    prev.activeCount = nextCount;
+    if (dirty) {
+        emitSyn(g_touchFd);
+    }
+}
+
+template <typename PacketT>
+static bool drainLatestPacket(
+    int fd,
+    uint32_t expectedMagic,
+    uint8_t *carry,
+    size_t &carryLen,
+    PacketT &latestOut,
+    bool &hasLatestOut
+) {
+    uint8_t buf[sizeof(PacketT) * 64];
+    hasLatestOut = false;
+
+    while (true) {
+        ssize_t n = read(fd, buf, sizeof(buf));
+        if (n > 0) {
+            size_t offset = 0;
+            if (carryLen > 0) {
+                size_t need = sizeof(PacketT) - carryLen;
+                size_t take = ((size_t)n < need) ? (size_t)n : need;
+                memcpy(carry + carryLen, buf, take);
+                carryLen += take;
+                offset += take;
+                if (carryLen == sizeof(PacketT)) {
+                    PacketT pkt{};
+                    memcpy(&pkt, carry, sizeof(pkt));
+                    if (pkt.magic == expectedMagic) {
+                        latestOut = pkt;
+                        hasLatestOut = true;
+                    }
+                    carryLen = 0;
+                }
+            }
+            while (offset + sizeof(PacketT) <= (size_t)n) {
+                PacketT pkt{};
+                memcpy(&pkt, buf + offset, sizeof(pkt));
+                if (pkt.magic == expectedMagic) {
+                    latestOut = pkt;
+                    hasLatestOut = true;
+                    offset += sizeof(PacketT);
+                } else {
+                    offset += 1;
+                }
+            }
+            if (offset < (size_t)n) {
+                carryLen = (size_t)n - offset;
+                memcpy(carry, buf + offset, carryLen);
+            }
+        } else if (n == 0) {
+            return false;
+        } else {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                return true;
+            }
+            if (errno == EINTR) continue;
+            return false;
+        }
+    }
+}
+
 static void inputLoop() {
     fcntl(g_stateReadFd, F_SETFL, O_NONBLOCK);
+    fcntl(g_touchReadFd, F_SETFL, O_NONBLOCK);
     GamepadState prevState;
+    TouchRuntimeState prevTouch;
 
-    struct pollfd pfds[2];
+    struct pollfd pfds[3];
     pfds[0].fd = g_stateReadFd;
     pfds[0].events = POLLIN;
-    pfds[1].fd = g_stopEventFd;
+    pfds[1].fd = g_touchReadFd;
     pfds[1].events = POLLIN;
+    pfds[2].fd = g_stopEventFd;
+    pfds[2].events = POLLIN;
 
-    uint8_t buf[sizeof(GamepadReportPacket) * 64];
-    uint8_t carry[sizeof(GamepadReportPacket)];
-    size_t carryLen = 0;
+    uint8_t gpCarry[sizeof(GamepadReportPacket)];
+    size_t gpCarryLen = 0;
+    uint8_t touchCarry[sizeof(TouchFramePacket)];
+    size_t touchCarryLen = 0;
 
     while (g_running.load()) {
-        int rc = poll(pfds, 2, 250);
+        int rc = poll(pfds, 3, 250);
         if (rc < 0) {
             if (errno == EINTR) continue;
             break;
         }
-        if (pfds[1].revents & POLLIN) {
+        if (pfds[2].revents & POLLIN) {
             break;
         }
-        if (pfds[0].revents & (POLLERR | POLLHUP | POLLNVAL)) {
-            if (!(pfds[0].revents & POLLIN)) {
+        if ((pfds[0].revents & (POLLERR | POLLHUP | POLLNVAL)) && !(pfds[0].revents & POLLIN)) {
+            break;
+        }
+        if ((pfds[1].revents & (POLLERR | POLLHUP | POLLNVAL)) && !(pfds[1].revents & POLLIN)) {
+            break;
+        }
+
+        if (pfds[0].revents & POLLIN) {
+            GamepadReportPacket latestGp{};
+            bool hasGp = false;
+            if (!drainLatestPacket(g_stateReadFd, PKT_MAGIC, gpCarry, gpCarryLen, latestGp, hasGp)) {
+                g_running.store(false);
                 break;
             }
-        }
-        if (pfds[0].revents & POLLIN) {
-            GamepadReportPacket latest{};
-            bool hasLatest = false;
-
-            while (true) {
-                ssize_t n = read(g_stateReadFd, buf, sizeof(buf));
-                if (n > 0) {
-                    size_t offset = 0;
-                    if (carryLen > 0) {
-                        size_t need = sizeof(GamepadReportPacket) - carryLen;
-                        size_t take = ((size_t)n < need) ? (size_t)n : need;
-                        memcpy(carry + carryLen, buf, take);
-                        carryLen += take;
-                        offset += take;
-                        if (carryLen == sizeof(GamepadReportPacket)) {
-                            GamepadReportPacket pkt{};
-                            memcpy(&pkt, carry, sizeof(pkt));
-                            if (pkt.magic == PKT_MAGIC) {
-                                latest = pkt;
-                                hasLatest = true;
-                            }
-                            carryLen = 0;
-                        }
-                    }
-                    while (offset + sizeof(GamepadReportPacket) <= (size_t)n) {
-                        GamepadReportPacket pkt{};
-                        memcpy(&pkt, buf + offset, sizeof(pkt));
-                        if (pkt.magic == PKT_MAGIC) {
-                            latest = pkt;
-                            hasLatest = true;
-                            offset += sizeof(GamepadReportPacket);
-                        } else {
-                            // Resync on magic
-                            offset += 1;
-                        }
-                    }
-                    if (offset < (size_t)n) {
-                        carryLen = (size_t)n - offset;
-                        memcpy(carry, buf + offset, carryLen);
-                    }
-                } else if (n == 0) {
-                    g_running.store(false);
-                    break;
-                } else {
-                    if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                        break;
-                    }
-                    if (errno == EINTR) continue;
-                    g_running.store(false);
-                    break;
-                }
+            if (hasGp) {
+                applyGamepadState(latestGp, prevState);
             }
+        }
 
-            if (hasLatest) {
-                applyGamepadState(latest, prevState);
+        if (pfds[1].revents & POLLIN) {
+            TouchFramePacket latestTouch{};
+            bool hasTouch = false;
+            if (!drainLatestPacket(g_touchReadFd, TOUCH_MAGIC, touchCarry, touchCarryLen, latestTouch, hasTouch)) {
+                g_running.store(false);
+                break;
+            }
+            if (hasTouch) {
+                applyTouchState(latestTouch, prevTouch);
             }
         }
     }
 
-    // Reset all buttons/axes on stop
+    // Reset all buttons/axes and release all fingers on stop
     GamepadReportPacket zeroPkt{};
     zeroPkt.magic = PKT_MAGIC;
     applyGamepadState(zeroPkt, prevState);
+
+    TouchFramePacket emptyTouch{};
+    emptyTouch.magic = TOUCH_MAGIC;
+    emptyTouch.slotCount = 0;
+    applyTouchState(emptyTouch, prevTouch);
+
     LOGI("inputLoop exited");
 }
 
@@ -440,9 +658,18 @@ static void stopSessionInternal() {
         close(g_extraFd);
         g_extraFd = -1;
     }
+    if (g_touchFd >= 0) {
+        ioctl(g_touchFd, UI_DEV_DESTROY);
+        close(g_touchFd);
+        g_touchFd = -1;
+    }
     if (g_stateReadFd >= 0) {
         close(g_stateReadFd);
         g_stateReadFd = -1;
+    }
+    if (g_touchReadFd >= 0) {
+        close(g_touchReadFd);
+        g_touchReadFd = -1;
     }
     if (g_rumbleWriteFd >= 0) {
         close(g_rumbleWriteFd);
@@ -457,56 +684,87 @@ static void stopSessionInternal() {
 
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_apex5_driver_shizuku_NativeUinput_nativeStartSession(
-    JNIEnv *env, jobject /*thiz*/, jint stateReadFd, jint rumbleWriteFd, jboolean enableExtraKeys) {
+    JNIEnv *env,
+    jobject /*thiz*/,
+    jint stateReadFd,
+    jint rumbleWriteFd,
+    jint touchReadFd,
+    jboolean enableGamepad,
+    jboolean enableExtraKeys,
+    jboolean enableTouchscreen
+) {
     std::lock_guard<std::mutex> lock(g_sessionMutex);
     stopSessionInternal();
 
     std::string err;
-    int ufd = createXbox360Uinput(true, err);
-    if (ufd < 0) {
-        LOGE("createXbox360Uinput with FF failed: %s, retrying without FF", err.c_str());
-        ufd = createXbox360Uinput(false, err);
-    }
-    if (ufd < 0) {
-        close(stateReadFd);
-        close(rumbleWriteFd);
-        return env->NewStringUTF(err.c_str());
+    int ufd = -1;
+    int efd = -1;
+    int tfd = -1;
+
+    if (enableGamepad) {
+        ufd = createXbox360Uinput(true, err);
+        if (ufd < 0) {
+            LOGE("createXbox360Uinput with FF failed: %s, retrying without FF", err.c_str());
+            ufd = createXbox360Uinput(false, err);
+        }
+        if (ufd < 0) {
+            close(stateReadFd);
+            close(rumbleWriteFd);
+            close(touchReadFd);
+            return env->NewStringUTF(err.c_str());
+        }
+
+        if (enableExtraKeys) {
+            std::string extraErr;
+            efd = createExtraKeysUinput(extraErr);
+            if (efd < 0) {
+                LOGE("Extra keys creation failed (non-fatal): %s", extraErr.c_str());
+            }
+        }
     }
 
-    int efd = -1;
-    if (enableExtraKeys) {
-        std::string extraErr;
-        efd = createExtraKeysUinput(extraErr);
-        if (efd < 0) {
-            LOGE("Extra keys creation failed (non-fatal): %s", extraErr.c_str());
+    if (enableTouchscreen) {
+        tfd = createTouchscreenUinput(err);
+        if (tfd < 0) {
+            if (ufd >= 0) { ioctl(ufd, UI_DEV_DESTROY); close(ufd); }
+            if (efd >= 0) { ioctl(efd, UI_DEV_DESTROY); close(efd); }
+            close(stateReadFd);
+            close(rumbleWriteFd);
+            close(touchReadFd);
+            return env->NewStringUTF(err.c_str());
         }
     }
 
     int stopFd = eventfd(0, EFD_NONBLOCK);
     if (stopFd < 0) {
         std::string sErr = std::string("eventfd failed: ") + strerror(errno);
-        ioctl(ufd, UI_DEV_DESTROY);
-        close(ufd);
+        if (ufd >= 0) { ioctl(ufd, UI_DEV_DESTROY); close(ufd); }
         if (efd >= 0) { ioctl(efd, UI_DEV_DESTROY); close(efd); }
+        if (tfd >= 0) { ioctl(tfd, UI_DEV_DESTROY); close(tfd); }
         close(stateReadFd);
         close(rumbleWriteFd);
+        close(touchReadFd);
         return env->NewStringUTF(sErr.c_str());
     }
 
     g_uinputFd = ufd;
     g_extraFd = efd;
+    g_touchFd = tfd;
     g_stateReadFd = stateReadFd;
+    g_touchReadFd = touchReadFd;
     g_rumbleWriteFd = rumbleWriteFd;
     g_stopEventFd = stopFd;
     g_running.store(true);
 
     g_inputThread = std::thread(inputLoop);
-    if (g_ffEnabled) {
+    if (g_uinputFd >= 0 && g_ffEnabled) {
         g_ffThread = std::thread(ffLoop);
     }
 
-    std::string okMsg = std::string("OK|ff=") + (g_ffEnabled ? "1" : "0") +
-                        "|extra=" + (g_extraFd >= 0 ? "1" : "0");
+    std::string okMsg = std::string("OK|gp=") + (g_uinputFd >= 0 ? "1" : "0") +
+                        "|ff=" + (g_ffEnabled ? "1" : "0") +
+                        "|extra=" + (g_extraFd >= 0 ? "1" : "0") +
+                        "|touch=" + (g_touchFd >= 0 ? "1" : "0");
     LOGI("Started uinput session: %s", okMsg.c_str());
     return env->NewStringUTF(okMsg.c_str());
 }

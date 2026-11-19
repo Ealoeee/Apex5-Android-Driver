@@ -87,11 +87,21 @@ object ShizukuBridge {
     fun startUinputSession(
         stateReadFd: ParcelFileDescriptor,
         rumbleWriteFd: ParcelFileDescriptor,
-        enableExtraKeys: Boolean
+        touchReadFd: ParcelFileDescriptor,
+        enableGamepad: Boolean,
+        enableExtraKeys: Boolean,
+        enableTouchscreen: Boolean
     ): Result<String> {
         val svc = ensureBound() ?: return Result.failure(IllegalStateException("无法绑定 Shizuku UserService"))
         return runCatching {
-            svc.startSession(stateReadFd, rumbleWriteFd, enableExtraKeys)
+            svc.startSession(
+                stateReadFd,
+                rumbleWriteFd,
+                touchReadFd,
+                enableGamepad,
+                enableExtraKeys,
+                enableTouchscreen
+            )
         }
     }
 

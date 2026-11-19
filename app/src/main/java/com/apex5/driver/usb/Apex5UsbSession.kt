@@ -10,8 +10,10 @@ import android.hardware.usb.UsbRequest
 import android.os.Process
 import android.os.SystemClock
 import com.apex5.driver.model.DriverConfig
+import com.apex5.driver.model.DriverOutputMode
 import com.apex5.driver.model.InputPreferenceMode
 import com.apex5.driver.model.LiveControllerState
+import com.apex5.driver.model.TouchProfile
 import java.nio.ByteBuffer
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.TimeoutException
@@ -21,7 +23,10 @@ class Apex5UsbSession(
     private val usbManager: UsbManager,
     private val device: UsbDevice,
     private val configProvider: () -> DriverConfig,
+    private val touchProfileProvider: () -> TouchProfile,
+    private val displayRotationProvider: () -> Int,
     private val onPacketOut: (ByteArray) -> Unit,
+    private val onTouchOut: (ByteArray) -> Unit,
     private val onLiveState: (LiveControllerState) -> Unit,
     private val onMetadata: (enhancedActive: Boolean, fw: String, battery: String) -> Unit,
     private val onLog: (String) -> Unit,
@@ -49,6 +54,7 @@ class Apex5UsbSession(
 
     private val pendingOutQueue = ConcurrentLinkedQueue<Pair<UsbEndpoint, ByteArray>>()
     private val mapper = InputMapper()
+    private val touchMapper = TouchMapperEngine()
 
     @Volatile
     private var enhancedStreamActive = false
@@ -220,7 +226,34 @@ class Apex5UsbSession(
 
         val tmp = ByteArray(128)
         val rawFrame = MutableRawFrame()
+        var hasValidFrame = false
         var exitReason = "已停止"
+
+        fun handleDecodedFrame(cfg: DriverConfig, now: Long) {
+            hasValidFrame = true
+            pktCount++
+            val needUi = (now - lastUiEmit >= 33L)
+            val (pktBytes, live) = mapper.processPacket(rawFrame, cfg, currentRateHz, needUi)
+            if (cfg.outputMode == DriverOutputMode.GAMEPAD) {
+                onPacketOut(pktBytes)
+            } else {
+                val touchBytes = touchMapper.processFrame(
+                    raw = rawFrame,
+                    config = cfg,
+                    profile = touchProfileProvider(),
+                    displayRotation = displayRotationProvider(),
+                    gyroToggleActive = mapper.lastGyroToggleActive,
+                    gyroHoldPressed = mapper.lastGyroHoldPressed
+                )
+                if (touchBytes != null) {
+                    onTouchOut(touchBytes)
+                }
+            }
+            if (live != null) {
+                lastUiEmit = now
+                onLiveState(live)
+            }
+        }
 
         while (running.get()) {
             val now = SystemClock.elapsedRealtime()
@@ -267,8 +300,9 @@ class Apex5UsbSession(
                 sendOutNow(item.first, item.second)
             }
 
+            val waitMs = if (cfg.outputMode == DriverOutputMode.TOUCH_MAPPER) 8L else 25L
             val completed = try {
-                conn.requestWait(25L)
+                conn.requestWait(waitMs)
             } catch (_: TimeoutException) {
                 null
             } catch (e: Exception) {
@@ -280,6 +314,19 @@ class Apex5UsbSession(
                 if (enhancedStreamActive && now - lastEfMillis > 350L) {
                     enhancedStreamActive = false
                     onMetadata(false, firmwareText, batteryText)
+                }
+                if (hasValidFrame && cfg.outputMode == DriverOutputMode.TOUCH_MAPPER) {
+                    val touchBytes = touchMapper.processFrame(
+                        raw = rawFrame,
+                        config = cfg,
+                        profile = touchProfileProvider(),
+                        displayRotation = displayRotationProvider(),
+                        gyroToggleActive = mapper.lastGyroToggleActive,
+                        gyroHoldPressed = mapper.lastGyroHoldPressed
+                    )
+                    if (touchBytes != null) {
+                        onTouchOut(touchBytes)
+                    }
                 }
                 continue
             }
@@ -309,14 +356,7 @@ class Apex5UsbSession(
                                             onLog("飞智增强流 (0xEF) 已激活：支持背键 M1-M4、LM/RM 与陀螺仪")
                                             onMetadata(true, firmwareText, batteryText)
                                         }
-                                        pktCount++
-                                        val needUi = (now - lastUiEmit >= 33L)
-                                        val (pktBytes, live) = mapper.processPacket(rawFrame, cfg, currentRateHz, needUi)
-                                        onPacketOut(pktBytes)
-                                        if (live != null) {
-                                            lastUiEmit = now
-                                            onLiveState(live)
-                                        }
+                                        handleDecodedFrame(cfg, now)
                                     }
                                 }
 
@@ -352,14 +392,7 @@ class Apex5UsbSession(
                     Tag.XINPUT_IN -> {
                         val useXInput = !wantEnhanced || !enhancedStreamActive || (now - lastEfMillis > 250L)
                         if (useXInput && Apex5Protocol.parseXInputInto(tmp, copyLen, rawFrame)) {
-                            pktCount++
-                            val needUi = (now - lastUiEmit >= 33L)
-                            val (pktBytes, live) = mapper.processPacket(rawFrame, cfg, currentRateHz, needUi)
-                            onPacketOut(pktBytes)
-                            if (live != null) {
-                                lastUiEmit = now
-                                onLiveState(live)
-                            }
+                            handleDecodedFrame(cfg, now)
                         }
                     }
 

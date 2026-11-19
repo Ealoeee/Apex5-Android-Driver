@@ -35,16 +35,26 @@ class MainActivity : ComponentActivity() {
         setContent {
             val status by DriverController.status.collectAsState()
             val config by DriverController.config.collectAsState()
+            val touchProfiles by DriverController.touchProfiles.collectAsState()
 
             MaterialTheme(colorScheme = darkColorScheme()) {
                 Apex5Dashboard(
                     status = status,
                     config = config,
+                    touchProfiles = touchProfiles,
                     onRefresh = { DriverController.refreshEnvironment(this) },
                     onRequestShizuku = { ShizukuBridge.requestPermission() },
                     onRequestUsb = { DriverController.requestUsbPermission(this) },
                     onStartDriver = { DriverController.startDriver(this) },
                     onStopDriver = { DriverController.stopDriver(this) },
+                    onSwitchOutputMode = { mode -> DriverController.switchOutputMode(this, mode) },
+                    onStartOverlay = { openEditor -> DriverController.startOverlay(this, openEditor) },
+                    onStopOverlay = { DriverController.stopOverlay(this) },
+                    onRequestOverlayPermission = { DriverController.requestOverlayPermission(this) },
+                    onSelectTouchProfile = { id -> DriverController.selectTouchProfile(this, id) },
+                    onCreateTouchProfile = { name -> DriverController.createTouchProfile(this, name) },
+                    onDeleteTouchProfile = { id -> DriverController.deleteTouchProfile(this, id) },
+                    onResetTouchPresets = { DriverController.resetTouchPresets(this) },
                     onProbePermissions = {
                         Thread { DriverController.probeShizukuPermissions() }.start()
                     },

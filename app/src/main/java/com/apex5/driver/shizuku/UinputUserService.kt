@@ -13,11 +13,22 @@ class UinputUserService : IUinputService.Stub() {
     override fun startSession(
         stateReadFd: ParcelFileDescriptor,
         rumbleWriteFd: ParcelFileDescriptor,
-        enableExtraKeys: Boolean
+        touchReadFd: ParcelFileDescriptor,
+        enableGamepad: Boolean,
+        enableExtraKeys: Boolean,
+        enableTouchscreen: Boolean
     ): String {
         val rawStateFd = stateReadFd.detachFd()
         val rawRumbleFd = rumbleWriteFd.detachFd()
-        return NativeUinput.nativeStartSession(rawStateFd, rawRumbleFd, enableExtraKeys)
+        val rawTouchFd = touchReadFd.detachFd()
+        return NativeUinput.nativeStartSession(
+            rawStateFd,
+            rawRumbleFd,
+            rawTouchFd,
+            enableGamepad,
+            enableExtraKeys,
+            enableTouchscreen
+        )
     }
 
     override fun stopSession() {

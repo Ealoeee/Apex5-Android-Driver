@@ -8,7 +8,10 @@ object NativeUinput {
     external fun nativeStartSession(
         stateReadFd: Int,
         rumbleWriteFd: Int,
-        enableExtraKeys: Boolean
+        touchReadFd: Int,
+        enableGamepad: Boolean,
+        enableExtraKeys: Boolean,
+        enableTouchscreen: Boolean
     ): String
 
     external fun nativeStopSession()

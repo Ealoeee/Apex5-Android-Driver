@@ -7,13 +7,19 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
+import android.net.Uri
 import android.os.Build
+import android.provider.Settings
 import androidx.core.content.ContextCompat
 import com.apex5.driver.config.ConfigStore
+import com.apex5.driver.config.TouchProfileStore
 import com.apex5.driver.model.DriverConfig
+import com.apex5.driver.model.DriverOutputMode
 import com.apex5.driver.model.DriverStatus
 import com.apex5.driver.model.LiveControllerState
 import com.apex5.driver.model.ShizukuState
+import com.apex5.driver.model.TouchProfile
+import com.apex5.driver.overlay.FloatingOverlayService
 import com.apex5.driver.shizuku.ShizukuBridge
 import com.apex5.driver.usb.Apex5Protocol
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -34,6 +40,9 @@ object DriverController {
     private val _config = MutableStateFlow(DriverConfig())
     val config: StateFlow<DriverConfig> = _config.asStateFlow()
 
+    private val _touchProfiles = MutableStateFlow<List<TouchProfile>>(emptyList())
+    val touchProfiles: StateFlow<List<TouchProfile>> = _touchProfiles.asStateFlow()
+
     private var initialized = false
     private val timeFmt = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
 
@@ -48,6 +57,7 @@ object DriverController {
         initialized = true
         val appCtx = context.applicationContext
         _config.value = ConfigStore.load(appCtx)
+        _touchProfiles.value = TouchProfileStore.loadAll(appCtx)
 
         val filter = IntentFilter().apply {
             addAction(ACTION_USB_PERMISSION)
@@ -118,6 +128,7 @@ object DriverController {
         val shizukuState = ShizukuBridge.getShizukuState(context)
         val dev = findApex5Device(context)
         val hasPerm = dev != null && usbManager.hasPermission(dev)
+        val hasOverlay = Settings.canDrawOverlays(context)
         val summary = if (dev != null) {
             val name = dev.productName?.trim()?.ifEmpty { null } ?: "Flydigi Controller"
             "$name (0x%04X:0x%04X)".format(dev.vendorId, dev.productId)
@@ -130,6 +141,7 @@ object DriverController {
                 shizukuState = shizukuState,
                 usbConnected = dev != null,
                 usbPermissionGranted = hasPerm,
+                overlayPermissionGranted = hasOverlay,
                 deviceSummary = summary
             )
         }
@@ -158,10 +170,87 @@ object DriverController {
         usbManager.requestPermission(dev, pi)
     }
 
+    fun requestOverlayPermission(context: Context) {
+        val intent = Intent(
+            Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+            Uri.parse("package:${context.packageName}")
+        ).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        context.startActivity(intent)
+    }
+
+    fun startOverlay(context: Context, openEditor: Boolean = false) {
+        if (!Settings.canDrawOverlays(context)) {
+            appendLog("请先授予“显示在其他应用上层”权限以使用悬浮窗")
+            requestOverlayPermission(context)
+            return
+        }
+        val intent = Intent(context, FloatingOverlayService::class.java).apply {
+            action = if (openEditor) FloatingOverlayService.ACTION_OPEN_EDITOR else FloatingOverlayService.ACTION_SHOW
+        }
+        context.startService(intent)
+    }
+
+    fun stopOverlay(context: Context) {
+        val intent = Intent(context, FloatingOverlayService::class.java).apply {
+            action = FloatingOverlayService.ACTION_HIDE
+        }
+        context.startService(intent)
+    }
+
     fun updateConfig(context: Context, transform: (DriverConfig) -> DriverConfig) {
         val updated = transform(_config.value)
         _config.value = updated
         ConfigStore.save(context, updated)
+    }
+
+    fun switchOutputMode(context: Context, mode: DriverOutputMode) {
+        if (_config.value.outputMode == mode) return
+        updateConfig(context) { it.copy(outputMode = mode) }
+        appendLog("输出模式已切换为: ${mode.label}")
+        if (_status.value.serviceRunning) {
+            val intent = Intent(context, ApexDriverService::class.java).apply {
+                action = ApexDriverService.ACTION_RESTART
+            }
+            ContextCompat.startForegroundService(context, intent)
+        }
+    }
+
+    fun activeTouchProfile(context: Context): TouchProfile {
+        val id = _config.value.activeTouchProfileId
+        val list = _touchProfiles.value.ifEmpty { TouchProfileStore.loadAll(context) }
+        return list.firstOrNull { it.id == id } ?: list.first()
+    }
+
+    fun selectTouchProfile(context: Context, profileId: String) {
+        updateConfig(context) { it.copy(activeTouchProfileId = profileId) }
+    }
+
+    fun saveTouchProfile(context: Context, profile: TouchProfile) {
+        TouchProfileStore.saveProfile(context, profile)
+        _touchProfiles.value = TouchProfileStore.loadAll(context)
+    }
+
+    fun createTouchProfile(context: Context, name: String): TouchProfile {
+        val created = TouchProfileStore.createNewProfile(context, name)
+        _touchProfiles.value = TouchProfileStore.loadAll(context)
+        selectTouchProfile(context, created.id)
+        return created
+    }
+
+    fun deleteTouchProfile(context: Context, profileId: String) {
+        val next = TouchProfileStore.deleteProfile(context, profileId)
+        _touchProfiles.value = next
+        if (_config.value.activeTouchProfileId !in next.map { it.id }) {
+            selectTouchProfile(context, next.first().id)
+        }
+    }
+
+    fun resetTouchPresets(context: Context) {
+        val next = TouchProfileStore.resetPresets(context)
+        _touchProfiles.value = next
+        selectTouchProfile(context, next.first().id)
     }
 
     fun startDriver(context: Context) {
@@ -206,9 +295,15 @@ object DriverController {
         onRumbleTestRequested?.invoke(200, 140)
     }
 
+    internal fun updateOverlayState(running: Boolean) {
+        _status.update { it.copy(overlayRunning = running) }
+    }
+
     internal fun updateServiceState(
         running: Boolean,
         uinputActive: Boolean,
+        touchActive: Boolean = false,
+        activeOutputMode: DriverOutputMode = _config.value.outputMode,
         ffSupported: Boolean = _status.value.ffSupported,
         extraDeviceActive: Boolean = _status.value.extraDeviceActive
     ) {
@@ -216,6 +311,8 @@ object DriverController {
             it.copy(
                 serviceRunning = running,
                 uinputActive = uinputActive,
+                touchActive = touchActive,
+                activeOutputMode = activeOutputMode,
                 ffSupported = ffSupported,
                 extraDeviceActive = extraDeviceActive,
                 enhancedActive = if (running) it.enhancedActive else false,

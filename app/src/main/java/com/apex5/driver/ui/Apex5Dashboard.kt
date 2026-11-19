@@ -28,8 +28,8 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.LinearProgressIndicator
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Tab
@@ -38,6 +38,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -47,11 +48,13 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.apex5.driver.model.DriverConfig
+import com.apex5.driver.model.DriverOutputMode
 import com.apex5.driver.model.DriverStatus
 import com.apex5.driver.model.ExtraButtonId
 import com.apex5.driver.model.GyroTriggerMode
@@ -59,6 +62,8 @@ import com.apex5.driver.model.InputPreferenceMode
 import com.apex5.driver.model.LiveControllerState
 import com.apex5.driver.model.MappingAction
 import com.apex5.driver.model.ShizukuState
+import com.apex5.driver.model.TouchOrientationMode
+import com.apex5.driver.model.TouchProfile
 import kotlin.math.roundToInt
 
 private val BgColor = Color(0xFF0B1120)
@@ -74,11 +79,20 @@ private val MutedText = Color(0xFF94A3B8)
 fun Apex5Dashboard(
     status: DriverStatus,
     config: DriverConfig,
+    touchProfiles: List<TouchProfile>,
     onRefresh: () -> Unit,
     onRequestShizuku: () -> Unit,
     onRequestUsb: () -> Unit,
     onStartDriver: () -> Unit,
     onStopDriver: () -> Unit,
+    onSwitchOutputMode: (DriverOutputMode) -> Unit,
+    onStartOverlay: (Boolean) -> Unit,
+    onStopOverlay: () -> Unit,
+    onRequestOverlayPermission: () -> Unit,
+    onSelectTouchProfile: (String) -> Unit,
+    onCreateTouchProfile: (String) -> TouchProfile,
+    onDeleteTouchProfile: (String) -> Unit,
+    onResetTouchPresets: () -> Unit,
     onProbePermissions: () -> Unit,
     onTestRumble: () -> Unit,
     onUpdateConfig: ((DriverConfig) -> DriverConfig) -> Unit
@@ -98,10 +112,14 @@ fun Apex5Dashboard(
 
         ControlBanner(
             status = status,
+            config = config,
             onRequestShizuku = onRequestShizuku,
             onRequestUsb = onRequestUsb,
             onStartDriver = onStartDriver,
             onStopDriver = onStopDriver,
+            onSwitchOutputMode = onSwitchOutputMode,
+            onStartOverlay = onStartOverlay,
+            onStopOverlay = onStopOverlay,
             onProbePermissions = onProbePermissions
         )
 
@@ -119,23 +137,41 @@ fun Apex5Dashboard(
             Tab(
                 selected = selectedTab == 1,
                 onClick = { selectedTab = 1 },
-                text = { Text("背键映射与陀螺仪", fontWeight = FontWeight.SemiBold) }
+                text = { Text("触屏映射与悬浮窗", fontWeight = FontWeight.SemiBold) }
             )
             Tab(
                 selected = selectedTab == 2,
                 onClick = { selectedTab = 2 },
+                text = { Text("背键映射与陀螺仪", fontWeight = FontWeight.SemiBold) }
+            )
+            Tab(
+                selected = selectedTab == 3,
+                onClick = { selectedTab = 3 },
                 text = { Text("诊断日志 (${status.logs.size})", fontWeight = FontWeight.SemiBold) }
             )
         }
 
         when (selectedTab) {
             0 -> LiveMonitorSection(status = status, onTestRumble = onTestRumble)
-            1 -> MappingAndGyroSection(
+            1 -> TouchMappingSection(
+                status = status,
+                config = config,
+                touchProfiles = touchProfiles,
+                onStartOverlay = onStartOverlay,
+                onStopOverlay = onStopOverlay,
+                onRequestOverlayPermission = onRequestOverlayPermission,
+                onSelectTouchProfile = onSelectTouchProfile,
+                onCreateTouchProfile = onCreateTouchProfile,
+                onDeleteTouchProfile = onDeleteTouchProfile,
+                onResetTouchPresets = onResetTouchPresets,
+                onUpdateConfig = onUpdateConfig
+            )
+            2 -> MappingAndGyroSection(
                 config = config,
                 serviceRunning = status.serviceRunning,
                 onUpdateConfig = onUpdateConfig
             )
-            2 -> LogsSection(logs = status.logs, onProbePermissions = onProbePermissions)
+            3 -> LogsSection(logs = status.logs, onProbePermissions = onProbePermissions)
         }
     }
 }
@@ -155,14 +191,16 @@ private fun HeaderSection(status: DriverStatus, onRefresh: () -> Unit) {
                 fontWeight = FontWeight.Bold
             )
             Text(
-                text = "USB Host + Shizuku /dev/uinput 虚拟 Xbox 360 手柄桥接",
+                text = "USB Host + Shizuku /dev/uinput 虚拟手柄 & 多点触屏映射 v0.2.0",
                 color = MutedText,
                 fontSize = 13.sp
             )
         }
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
             StatusPill(
-                text = if (status.serviceRunning) "驱动运行中" else "未启动",
+                text = if (status.serviceRunning) {
+                    if (status.activeOutputMode == DriverOutputMode.TOUCH_MAPPER) "触屏映射中" else "手柄运行中"
+                } else "未启动",
                 color = if (status.serviceRunning) OkGreen else MutedText
             )
             OutlinedButton(onClick = onRefresh) {
@@ -175,10 +213,14 @@ private fun HeaderSection(status: DriverStatus, onRefresh: () -> Unit) {
 @Composable
 private fun ControlBanner(
     status: DriverStatus,
+    config: DriverConfig,
     onRequestShizuku: () -> Unit,
     onRequestUsb: () -> Unit,
     onStartDriver: () -> Unit,
     onStopDriver: () -> Unit,
+    onSwitchOutputMode: (DriverOutputMode) -> Unit,
+    onStartOverlay: (Boolean) -> Unit,
+    onStopOverlay: () -> Unit,
     onProbePermissions: () -> Unit
 ) {
     SectionCard {
@@ -213,17 +255,56 @@ private fun ControlBanner(
                 )
 
                 InfoBox(
-                    title = "3. 虚拟手柄与协议状态",
+                    title = "3. 虚拟设备与协议状态",
                     value = if (status.serviceRunning) {
+                        val outType = if (status.touchActive) "虚拟触屏" else "Xbox 360"
                         val mode = if (status.enhancedActive) "增强 0xEF" else "XInput"
-                        val ff = if (status.ffSupported) "震动就绪" else "无震动"
-                        "$mode | $ff | FW ${status.firmwareText} | ${status.batteryText}"
+                        "$outType | $mode | FW ${status.firmwareText} | ${status.batteryText}"
                     } else {
                         "手柄需长按 HOME 切至「PC -> 有线」"
                     },
-                    ok = status.uinputActive,
+                    ok = status.uinputActive || status.touchActive,
                     modifier = Modifier.weight(1f)
                 )
+            }
+
+            // Output mode selector bar
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("输出模式:", color = MutedText, fontSize = 13.sp)
+                DriverOutputMode.entries.forEach { mode ->
+                    val selected = config.outputMode == mode
+                    OutlinedButton(
+                        onClick = { onSwitchOutputMode(mode) },
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            containerColor = if (selected) AccentCyan.copy(alpha = 0.2f) else Color.Transparent
+                        ),
+                        modifier = Modifier.height(38.dp)
+                    ) {
+                        Text(
+                            text = mode.label,
+                            color = if (selected) AccentCyan else MutedText,
+                            fontSize = 12.5f.sp,
+                            fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal
+                        )
+                    }
+                }
+                Spacer(Modifier.weight(1f))
+                OutlinedButton(
+                    onClick = {
+                        if (status.overlayRunning) onStopOverlay() else onStartOverlay(false)
+                    },
+                    modifier = Modifier.height(38.dp)
+                ) {
+                    Text(
+                        text = if (status.overlayRunning) "关闭悬浮窗" else "开启悬浮窗",
+                        color = if (status.overlayRunning) OkGreen else AccentCyan,
+                        fontSize = 12.5f.sp
+                    )
+                }
             }
 
             status.lastError?.let { err ->
@@ -359,6 +440,196 @@ private fun LiveMonitorSection(status: DriverStatus, onTestRumble: () -> Unit) {
                 ButtonBadge("M4", live.m4, accent = Color(0xFFA855F7))
                 ButtonBadge("LM", live.lm, accent = Color(0xFFEC4899))
                 ButtonBadge("RM", live.rm, accent = Color(0xFFEC4899))
+            }
+        }
+    }
+}
+
+@Composable
+private fun TouchMappingSection(
+    status: DriverStatus,
+    config: DriverConfig,
+    touchProfiles: List<TouchProfile>,
+    onStartOverlay: (Boolean) -> Unit,
+    onStopOverlay: () -> Unit,
+    onRequestOverlayPermission: () -> Unit,
+    onSelectTouchProfile: (String) -> Unit,
+    onCreateTouchProfile: (String) -> TouchProfile,
+    onDeleteTouchProfile: (String) -> Unit,
+    onResetTouchPresets: () -> Unit,
+    onUpdateConfig: ((DriverConfig) -> DriverConfig) -> Unit
+) {
+    val activeProfile = touchProfiles.firstOrNull { it.id == config.activeTouchProfileId } ?: touchProfiles.firstOrNull()
+    var newProfileName by remember { mutableStateOf("") }
+    val activePointers = remember { mutableStateListOf<Offset>() }
+    var lastTouchLog by remember { mutableStateOf("等待触控事件（可切换到「触屏映射模式」后按手柄测试）") }
+
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        SectionCard {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text("悬浮窗与游戏内可视化编辑", color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
+                Text(
+                    "在游戏画面上方直接拖动摇杆轮盘、FPS 视角滑动区与按键坐标，并支持按下手柄实体按键自动识别绑定。",
+                    color = MutedText,
+                    fontSize = 12.sp
+                )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    StatusPill(
+                        text = if (status.overlayPermissionGranted) "悬浮窗权限已授予" else "缺少悬浮窗权限",
+                        color = if (status.overlayPermissionGranted) OkGreen else WarnAmber
+                    )
+                    if (!status.overlayPermissionGranted) {
+                        OutlinedButton(onClick = onRequestOverlayPermission) {
+                            Text("前往授权悬浮窗", color = AccentCyan)
+                        }
+                    } else {
+                        Button(
+                            onClick = { onStartOverlay(true) },
+                            colors = ButtonDefaults.buttonColors(containerColor = AccentCyan, contentColor = Color(0xFF082F49))
+                        ) {
+                            Text("打开悬浮窗并编辑键位", fontWeight = FontWeight.Bold)
+                        }
+                        OutlinedButton(
+                            onClick = { if (status.overlayRunning) onStopOverlay() else onStartOverlay(false) }
+                        ) {
+                            Text(if (status.overlayRunning) "隐藏悬浮窗" else "仅显示悬浮球", color = AccentCyan)
+                        }
+                    }
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("触屏模式显示半透明键位提示", color = Color.White, fontSize = 14.sp)
+                        Text("在游戏界面显示键位圆圈提示，不阻挡真实手指触控", color = MutedText, fontSize = 12.sp)
+                    }
+                    Switch(
+                        checked = config.showTouchHints,
+                        onCheckedChange = { show -> onUpdateConfig { it.copy(showTouchHints = show) } }
+                    )
+                }
+
+                DropdownRow(
+                    label = "触控屏幕方向校准",
+                    currentText = config.touchOrientationMode.label,
+                    options = TouchOrientationMode.entries.map { it.label to it },
+                    onSelect = { mode -> onUpdateConfig { it.copy(touchOrientationMode = mode) } }
+                )
+            }
+        }
+
+        SectionCard {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("触屏映射方案管理", color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
+
+                if (touchProfiles.isNotEmpty() && activeProfile != null) {
+                    DropdownRow(
+                        label = "当前启用方案",
+                        currentText = "${activeProfile.name} (${activeProfile.nodes.size} 键位)",
+                        options = touchProfiles.map { "${it.name} (${it.nodes.size})" to it.id },
+                        onSelect = onSelectTouchProfile
+                    )
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    OutlinedTextField(
+                        value = newProfileName,
+                        onValueChange = { newProfileName = it },
+                        placeholder = { Text("输入新方案名称，例如：三角洲行动") },
+                        singleLine = true,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Button(
+                        onClick = {
+                            onCreateTouchProfile(newProfileName.trim())
+                            newProfileName = ""
+                        }
+                    ) {
+                        Text("新建方案")
+                    }
+                }
+
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    if (activeProfile != null && touchProfiles.size > 1) {
+                        OutlinedButton(onClick = { onDeleteTouchProfile(activeProfile.id) }) {
+                            Text("删除当前方案", color = ErrRed)
+                        }
+                    }
+                    OutlinedButton(onClick = onResetTouchPresets) {
+                        Text("恢复内置预设", color = MutedText)
+                    }
+                }
+
+                activeProfile?.let { prof ->
+                    Text(
+                        text = "当前方案节点: " + if (prof.nodes.isEmpty()) "无（请打开悬浮窗添加）" else prof.nodes.joinToString(" · ") {
+                            "${it.input.shortLabel}(${(it.xNorm * 100).roundToInt()}%,${(it.yNorm * 100).roundToInt()}%)"
+                        },
+                        color = MutedText,
+                        fontSize = 12.sp
+                    )
+                }
+            }
+        }
+
+        SectionCard {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("虚拟触控校准测试画板", color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
+                Text(lastTouchLog, color = AccentCyan, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(190.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(Color(0xFF090E1A))
+                        .border(1.dp, CardBorder, RoundedCornerShape(10.dp))
+                        .pointerInput(Unit) {
+                            awaitPointerEventScope {
+                                while (true) {
+                                    val event = awaitPointerEvent()
+                                    activePointers.clear()
+                                    event.changes.forEach { change ->
+                                        if (change.pressed) {
+                                            activePointers.add(change.position)
+                                        }
+                                    }
+                                    if (activePointers.isNotEmpty()) {
+                                        val first = activePointers.first()
+                                        val nx = (first.x / size.width.coerceAtLeast(1)).coerceIn(0f, 1f)
+                                        val ny = (first.y / size.height.coerceAtLeast(1)).coerceIn(0f, 1f)
+                                        lastTouchLog = "检测到 ${activePointers.size} 指触控 | 局部坐标=(%.2f, %.2f)".format(nx, ny)
+                                    }
+                                }
+                            }
+                        }
+                ) {
+                    Canvas(modifier = Modifier.fillMaxSize()) {
+                        val stepX = size.width / 4f
+                        val stepY = size.height / 3f
+                        for (i in 1..3) {
+                            drawLine(CardBorder, Offset(stepX * i, 0f), Offset(stepX * i, size.height), 1f)
+                        }
+                        for (j in 1..2) {
+                            drawLine(CardBorder, Offset(0f, stepY * j), Offset(size.width, stepY * j), 1f)
+                        }
+                        activePointers.forEach { pt ->
+                            drawCircle(color = AccentCyan.copy(alpha = 0.25f), radius = 34f, center = pt)
+                            drawCircle(color = AccentCyan, radius = 14f, center = pt)
+                        }
+                    }
+                }
             }
         }
     }

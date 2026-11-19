@@ -52,11 +52,80 @@ enum class GyroTriggerMode(val label: String) {
     HOLD_MAPPING("由自定义按键(按住/开关)控制")
 }
 
+enum class DriverOutputMode(val label: String) {
+    GAMEPAD("原生 Xbox 360 手柄模式"),
+    TOUCH_MAPPER("触屏映射模式 (虚拟多点触控)")
+}
+
+enum class TouchOrientationMode(val label: String) {
+    AUTO("自动跟随屏幕旋转 (推荐)"),
+    DIRECT_NO_ROTATE("直出坐标 (不旋转)"),
+    ROTATE_90("顺时针 90° 校准"),
+    ROTATE_180("180° 校准"),
+    ROTATE_270("逆时针 90° 校准")
+}
+
+enum class ControllerInputSource(val shortLabel: String, val label: String) {
+    LEFT_STICK("L摇杆", "左摇杆 (LX/LY)"),
+    RIGHT_STICK("R摇杆", "右摇杆 (RX/RY)"),
+    A("A", "A 键"),
+    B("B", "B 键"),
+    X("X", "X 键"),
+    Y("Y", "Y 键"),
+    LB("LB", "LB 左肩键"),
+    RB("RB", "RB 右肩键"),
+    LT("LT", "LT 左扳机"),
+    RT("RT", "RT 右扳机"),
+    L3("L3", "L3 左摇杆按下"),
+    R3("R3", "R3 右摇杆按下"),
+    BACK("Back", "Back / View"),
+    START("Start", "Start / Menu"),
+    DPAD_UP("↑", "十字键 上"),
+    DPAD_DOWN("↓", "十字键 下"),
+    DPAD_LEFT("←", "十字键 左"),
+    DPAD_RIGHT("→", "十字键 右"),
+    M1("M1", "背键 M1 (0xEF)"),
+    M2("M2", "背键 M2 (0xEF)"),
+    M3("M3", "背键 M3 (0xEF)"),
+    M4("M4", "背键 M4 (0xEF)"),
+    LM("LM", "顶部肩键 LM (0xEF)"),
+    RM("RM", "顶部肩键 RM (0xEF)")
+}
+
+enum class TouchNodeKind(val label: String) {
+    TAP("点击 / 长按"),
+    RAPID_TAP("连发点击"),
+    JOYSTICK("轮盘摇杆 / 技能拖拽"),
+    CAMERA_SWIPE("FPS 视角滑动 (无限转向 + 陀螺仪)")
+}
+
+data class TouchNodeConfig(
+    val id: String,
+    val input: ControllerInputSource,
+    val kind: TouchNodeKind,
+    val xNorm: Float,
+    val yNorm: Float,
+    val radiusNorm: Float = 0.09f,
+    val sensitivity: Float = 1.0f,
+    val rapidHz: Int = 12,
+    val gyroAssist: Boolean = true
+)
+
+data class TouchProfile(
+    val id: String,
+    val name: String,
+    val nodes: List<TouchNodeConfig>
+)
+
 data class DriverConfig(
+    val outputMode: DriverOutputMode = DriverOutputMode.GAMEPAD,
     val inputMode: InputPreferenceMode = InputPreferenceMode.AUTO_PREFER_ENHANCED,
     val stickDeadzonePercent: Int = 4,
     val enableExtraButtonDevice: Boolean = false,
     val blockHomeButton: Boolean = false,
+    val touchOrientationMode: TouchOrientationMode = TouchOrientationMode.AUTO,
+    val activeTouchProfileId: String = "fps_default",
+    val showTouchHints: Boolean = true,
     val buttonMappings: Map<ExtraButtonId, MappingAction> = mapOf(
         ExtraButtonId.M1 to MappingAction.A,
         ExtraButtonId.M2 to MappingAction.B,
@@ -110,10 +179,14 @@ data class LiveControllerState(
 data class DriverStatus(
     val serviceRunning: Boolean = false,
     val uinputActive: Boolean = false,
+    val touchActive: Boolean = false,
+    val activeOutputMode: DriverOutputMode = DriverOutputMode.GAMEPAD,
     val ffSupported: Boolean = false,
     val extraDeviceActive: Boolean = false,
     val usbConnected: Boolean = false,
     val usbPermissionGranted: Boolean = false,
+    val overlayPermissionGranted: Boolean = false,
+    val overlayRunning: Boolean = false,
     val deviceSummary: String = "未检测到手柄",
     val enhancedActive: Boolean = false,
     val firmwareText: String = "--",

@@ -13,9 +13,12 @@ import android.os.Build
 import android.os.IBinder
 import android.os.ParcelFileDescriptor
 import android.os.PowerManager
+import android.view.Surface
+import android.view.WindowManager
 import androidx.core.app.NotificationCompat
 import com.apex5.driver.MainActivity
 import com.apex5.driver.R
+import com.apex5.driver.model.DriverOutputMode
 import com.apex5.driver.shizuku.ShizukuBridge
 import com.apex5.driver.usb.Apex5UsbSession
 import java.io.FileInputStream
@@ -26,6 +29,7 @@ class ApexDriverService : Service() {
     companion object {
         const val ACTION_START = "com.apex5.driver.START"
         const val ACTION_STOP = "com.apex5.driver.STOP"
+        const val ACTION_RESTART = "com.apex5.driver.RESTART"
         private const val CHANNEL_ID = "apex5_driver_channel"
         private const val NOTIF_ID = 5001
     }
@@ -35,13 +39,17 @@ class ApexDriverService : Service() {
     private var usbSession: Apex5UsbSession? = null
     private var stateWritePfd: ParcelFileDescriptor? = null
     private var stateOutStream: FileOutputStream? = null
+    private var touchWritePfd: ParcelFileDescriptor? = null
+    private var touchOutStream: FileOutputStream? = null
     private var rumbleReadPfd: ParcelFileDescriptor? = null
     private var rumbleThread: Thread? = null
+    private var windowManager: WindowManager? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
         super.onCreate()
+        windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
         createNotificationChannel()
     }
 
@@ -51,6 +59,16 @@ class ApexDriverService : Service() {
                 stopAll()
                 stopSelf()
                 return START_NOT_STICKY
+            }
+
+            ACTION_RESTART -> {
+                startForegroundCompat("正在切换输出模式...")
+                Thread({
+                    stopAll()
+                    Thread.sleep(80)
+                    startDriverPipeline()
+                }, "Apex5-Restart").start()
+                return START_STICKY
             }
 
             else -> {
@@ -66,6 +84,19 @@ class ApexDriverService : Service() {
     override fun onDestroy() {
         stopAll()
         super.onDestroy()
+    }
+
+    @Suppress("DEPRECATION")
+    private fun getCurrentDisplayRotation(): Int {
+        return runCatching {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                (getSystemService(Context.DISPLAY_SERVICE) as? android.hardware.display.DisplayManager)
+                    ?.getDisplay(android.view.Display.DEFAULT_DISPLAY)?.rotation
+                    ?: Surface.ROTATION_0
+            } else {
+                windowManager?.defaultDisplay?.rotation ?: Surface.ROTATION_0
+            }
+        }.getOrDefault(Surface.ROTATION_0)
     }
 
     private fun startForegroundCompat(text: String) {
@@ -118,7 +149,7 @@ class ApexDriverService : Service() {
                 "Apex 5 手柄驱动后台服务",
                 NotificationManager.IMPORTANCE_LOW
             ).apply {
-                description = "保持有线手柄数据转发与虚拟 Xbox 360 手柄存活"
+                description = "保持有线手柄数据转发与虚拟手柄/触屏存活"
             }
             nm.createNotificationChannel(ch)
         }
@@ -138,19 +169,31 @@ class ApexDriverService : Service() {
 
         val statePipe = ParcelFileDescriptor.createPipe()
         val rumblePipe = ParcelFileDescriptor.createPipe()
+        val touchPipe = ParcelFileDescriptor.createPipe()
         val cfg = DriverController.config.value
+        val useGamepad = cfg.outputMode == DriverOutputMode.GAMEPAD
+        val useTouch = cfg.outputMode == DriverOutputMode.TOUCH_MAPPER
 
-        DriverController.appendLog("正在通过 Shizuku 创建虚拟 Xbox 360 手柄...")
-        val res = ShizukuBridge.startUinputSession(statePipe[0], rumblePipe[1], cfg.enableExtraButtonDevice)
+        DriverController.appendLog("正在通过 Shizuku 创建虚拟设备 (${cfg.outputMode.label})...")
+        val res = ShizukuBridge.startUinputSession(
+            stateReadFd = statePipe[0],
+            rumbleWriteFd = rumblePipe[1],
+            touchReadFd = touchPipe[0],
+            enableGamepad = useGamepad,
+            enableExtraKeys = useGamepad && cfg.enableExtraButtonDevice,
+            enableTouchscreen = useTouch
+        )
 
         // Close remote ends in this process
         runCatching { statePipe[0].close() }
         runCatching { rumblePipe[1].close() }
+        runCatching { touchPipe[0].close() }
 
         val uinputReply = res.getOrElse {
             runCatching { statePipe[1].close() }
             runCatching { rumblePipe[0].close() }
-            DriverController.setError("启动虚拟手柄失败: ${it.message}")
+            runCatching { touchPipe[1].close() }
+            DriverController.setError("启动虚拟设备失败: ${it.message}")
             stopAll()
             stopSelf()
             return
@@ -159,18 +202,23 @@ class ApexDriverService : Service() {
         if (!uinputReply.startsWith("OK")) {
             runCatching { statePipe[1].close() }
             runCatching { rumblePipe[0].close() }
+            runCatching { touchPipe[1].close() }
             DriverController.setError("uinput 创建失败: $uinputReply")
             stopAll()
             stopSelf()
             return
         }
 
+        val gpActive = uinputReply.contains("gp=1")
         val ffSupported = uinputReply.contains("ff=1")
         val extraActive = uinputReply.contains("extra=1")
-        DriverController.appendLog("虚拟 Xbox 360 手柄已就绪 ($uinputReply)")
+        val touchActive = uinputReply.contains("touch=1")
+        DriverController.appendLog("虚拟输入设备已就绪 ($uinputReply)")
 
         stateWritePfd = statePipe[1]
         stateOutStream = FileOutputStream(statePipe[1].fileDescriptor)
+        touchWritePfd = touchPipe[1]
+        touchOutStream = FileOutputStream(touchPipe[1].fileDescriptor)
         rumbleReadPfd = rumblePipe[0]
 
         val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
@@ -182,9 +230,17 @@ class ApexDriverService : Service() {
             usbManager = usbManager,
             device = dev,
             configProvider = { DriverController.config.value },
+            touchProfileProvider = { DriverController.activeTouchProfile(this) },
+            displayRotationProvider = { getCurrentDisplayRotation() },
             onPacketOut = { bytes ->
                 try {
                     stateOutStream?.write(bytes)
+                } catch (_: Exception) {
+                }
+            },
+            onTouchOut = { bytes ->
+                try {
+                    touchOutStream?.write(bytes)
                 } catch (_: Exception) {
                 }
             },
@@ -193,7 +249,12 @@ class ApexDriverService : Service() {
             },
             onMetadata = { enhanced, fw, battery ->
                 DriverController.updateMetadata(enhanced, fw, battery)
-                val modeDesc = if (enhanced) "飞智增强 0xEF (含背键/陀螺仪)" else "标准 XInput 模式"
+                val outDesc = if (DriverController.config.value.outputMode == DriverOutputMode.TOUCH_MAPPER) {
+                    "触屏映射"
+                } else {
+                    "Xbox手柄"
+                }
+                val modeDesc = if (enhanced) "$outDesc | 0xEF 增强" else "$outDesc | XInput"
                 updateNotification("$modeDesc | 电量 $battery")
             },
             onLog = { msg -> DriverController.appendLog(msg) },
@@ -240,16 +301,23 @@ class ApexDriverService : Service() {
 
         DriverController.updateServiceState(
             running = true,
-            uinputActive = true,
+            uinputActive = gpActive,
+            touchActive = touchActive,
+            activeOutputMode = cfg.outputMode,
             ffSupported = ffSupported,
             extraDeviceActive = extraActive
         )
-        updateNotification("已激活虚拟 Xbox 360 手柄，等待/转发输入中")
+        val notifMsg = if (useTouch) {
+            "触屏映射模式运行中 (${DriverController.activeTouchProfile(this).name})"
+        } else {
+            "已激活虚拟 Xbox 360 手柄，等待/转发输入中"
+        }
+        updateNotification(notifMsg)
     }
 
     private fun stopAll() {
         if (!active.getAndSet(false)) {
-            DriverController.updateServiceState(running = false, uinputActive = false)
+            DriverController.updateServiceState(running = false, uinputActive = false, touchActive = false)
             return
         }
         DriverController.onRumbleTestRequested = null
@@ -260,6 +328,10 @@ class ApexDriverService : Service() {
         stateOutStream = null
         runCatching { stateWritePfd?.close() }
         stateWritePfd = null
+        runCatching { touchOutStream?.close() }
+        touchOutStream = null
+        runCatching { touchWritePfd?.close() }
+        touchWritePfd = null
         runCatching { rumbleReadPfd?.close() }
         rumbleReadPfd = null
 
@@ -273,7 +345,7 @@ class ApexDriverService : Service() {
         }
         wakeLock = null
 
-        DriverController.updateServiceState(running = false, uinputActive = false)
+        DriverController.updateServiceState(running = false, uinputActive = false, touchActive = false)
         DriverController.appendLog("驱动服务已停止")
     }
 }

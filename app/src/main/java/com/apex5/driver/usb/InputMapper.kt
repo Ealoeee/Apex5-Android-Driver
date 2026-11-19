@@ -22,6 +22,11 @@ class InputMapper {
     private var gyroToggleActive = false
     private var seqCounter = 0
 
+    var lastGyroToggleActive: Boolean = false
+        private set
+    var lastGyroHoldPressed: Boolean = false
+        private set
+
     private val outBytes = ByteArray(PACKET_SIZE)
     private val outBuf = ByteBuffer.wrap(outBytes).order(ByteOrder.LITTLE_ENDIAN)
 
@@ -115,6 +120,8 @@ class InputMapper {
             gyroToggleActive = !gyroToggleActive
         }
         prevTogglePressed = gyroTogglePressed
+        lastGyroToggleActive = gyroToggleActive
+        lastGyroHoldPressed = gyroHoldPressed
 
         val gyroAimActive = raw.isEnhanced && when (config.gyroTriggerMode) {
             GyroTriggerMode.OFF -> false
