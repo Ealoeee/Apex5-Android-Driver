@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Flydigi Apex 5 (VID 0x37D7 = 14295, PID 0x2501 = 9473) -->
+    <usb-device vendor-id="14295" product-id="9473" />
+    <!-- Generic Flydigi VID fallback -->
+    <usb-device vendor-id="14295" />
+</resources>

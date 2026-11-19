@@ -1,0 +1,26 @@
+# Built & third-party binaries
+*.apk
+*.ap_
+*.aab
+base.apk
+
+# Gradle / Kotlin / CMake build outputs
+.gradle/
+.kotlin/
+build/
+app/build/
+app/.cxx/
+
+# Local environment config
+local.properties
+
+# IDE files
+.idea/
+*.iml
+captures/
+.navigation/
+
+# OS & logs
+.DS_Store
+Thumbs.db
+*.log
