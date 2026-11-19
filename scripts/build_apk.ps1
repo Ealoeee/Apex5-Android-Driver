@@ -1,5 +1,7 @@
 $ErrorActionPreference = "Stop"
 
+$repoRoot = Split-Path -Parent $PSScriptRoot
+
 $jdk = (Get-ChildItem "C:\Program Files\Eclipse Adoptium\jdk-17*" -ErrorAction SilentlyContinue | Select-Object -First 1)
 if (-not $jdk) {
     throw "Eclipse Adoptium JDK 17 not found."
@@ -32,12 +34,12 @@ try {
 Write-Host "JAVA_HOME=$env:JAVA_HOME"
 Write-Host "ANDROID_HOME=$env:ANDROID_HOME"
 
-& "$PSScriptRoot\gradlew.bat" :app:assembleDebug --no-daemon @proxyArgs
+& "$repoRoot\gradlew.bat" -p $repoRoot :app:assembleDebug --no-daemon @proxyArgs
 if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }
 
-$apk = "$PSScriptRoot\app\build\outputs\apk\debug\app-debug.apk"
+$apk = "$repoRoot\app\build\outputs\apk\debug\app-debug.apk"
 if (Test-Path $apk) {
     Write-Host "`nBuild succeeded! APK: $apk"
 }
