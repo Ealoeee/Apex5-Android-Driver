@@ -24,6 +24,7 @@ import androidx.core.content.ContextCompat
 import com.apex5.driver.service.DriverController
 import com.apex5.driver.shizuku.ShizukuBridge
 import com.apex5.driver.ui.Apex5Dashboard
+import com.apex5.driver.update.UpdateManager
 
 private val Apex5ColorScheme = darkColorScheme(
     primary = Color(0xFF38BDF8),
@@ -55,17 +56,20 @@ class MainActivity : ComponentActivity() {
         DriverController.init(this)
         requestNotificationPermissionIfNeeded()
         handleUsbLaunchIntent(intent)
+        UpdateManager.checkForUpdate(silent = true)
 
         setContent {
             val status by DriverController.status.collectAsState()
             val config by DriverController.config.collectAsState()
             val touchProfiles by DriverController.touchProfiles.collectAsState()
+            val updateState by UpdateManager.state.collectAsState()
 
             MaterialTheme(colorScheme = Apex5ColorScheme) {
                 Apex5Dashboard(
                     status = status,
                     config = config,
                     touchProfiles = touchProfiles,
+                    updateState = updateState,
                     onRefresh = { DriverController.refreshEnvironment(this) },
                     onRequestShizuku = { ShizukuBridge.requestPermission() },
                     onRequestUsb = { DriverController.requestUsbPermission(this) },
@@ -87,6 +91,15 @@ class MainActivity : ComponentActivity() {
                     },
                     onClearLogs = { DriverController.clearLogs() },
                     onTestRumble = { DriverController.triggerTestRumble() },
+                    onTestTriggerRumble = { DriverController.triggerTestTriggerRumble() },
+                    onApplySpacePreset = { preset -> DriverController.applySpaceStationPreset(this, preset) },
+                    onExportSpaceJson = { DriverController.exportSpaceStationConfigJson() },
+                    onImportSpaceJson = { json -> DriverController.importSpaceStationConfigJson(this, json) },
+                    onCheckUpdate = { UpdateManager.checkForUpdate(silent = false) },
+                    onDownloadUpdate = { UpdateManager.downloadLatestApk(this) },
+                    onInstallUpdateSystem = { UpdateManager.installViaSystemInstaller(this) },
+                    onInstallUpdateShizuku = { UpdateManager.installViaShizuku() },
+                    onToggleUpdateMirror = { enabled -> UpdateManager.setUseMirrorProxy(enabled) },
                     onUpdateConfig = { transform -> DriverController.updateConfig(this, transform) }
                 )
             }

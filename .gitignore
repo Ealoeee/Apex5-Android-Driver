@@ -11,8 +11,11 @@ build/
 app/build/
 app/.cxx/
 
-# Local environment config
+# Local environment config & signing secrets
 local.properties
+signing.properties
+*.jks
+*.keystore
 
 # IDE files
 .idea/

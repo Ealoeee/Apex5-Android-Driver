@@ -280,6 +280,13 @@ class ApexDriverService : Service() {
                 session.sendRumble(0, 0)
             }.start()
         }
+        DriverController.onTriggerRumbleTestRequested = { lt, rt ->
+            Thread {
+                session.sendRumble(0, 0, forceTriggerL = lt, forceTriggerR = rt)
+                Thread.sleep(240)
+                session.sendRumble(0, 0, forceTriggerL = 0, forceTriggerR = 0)
+            }.start()
+        }
 
         rumbleThread = Thread({
             val buf = ByteArray(4)
@@ -321,6 +328,7 @@ class ApexDriverService : Service() {
             return
         }
         DriverController.onRumbleTestRequested = null
+        DriverController.onTriggerRumbleTestRequested = null
         usbSession?.stop()
         usbSession = null
 

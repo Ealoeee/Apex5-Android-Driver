@@ -18,6 +18,7 @@ import com.apex5.driver.model.DriverOutputMode
 import com.apex5.driver.model.DriverStatus
 import com.apex5.driver.model.LiveControllerState
 import com.apex5.driver.model.ShizukuState
+import com.apex5.driver.model.SpaceStationPreset
 import com.apex5.driver.model.TouchProfile
 import com.apex5.driver.overlay.FloatingOverlayService
 import com.apex5.driver.shizuku.ShizukuBridge
@@ -48,6 +49,9 @@ object DriverController {
 
     @Volatile
     var onRumbleTestRequested: ((Int, Int) -> Unit)? = null
+
+    @Volatile
+    var onTriggerRumbleTestRequested: ((Int, Int) -> Unit)? = null
 
     fun init(context: Context) {
         if (initialized) {
@@ -321,6 +325,33 @@ object DriverController {
 
     fun triggerTestRumble() {
         onRumbleTestRequested?.invoke(200, 140)
+    }
+
+    fun triggerTestTriggerRumble() {
+        onTriggerRumbleTestRequested?.invoke(210, 210)
+    }
+
+    fun applySpaceStationPreset(context: Context, preset: SpaceStationPreset) {
+        updateConfig(context) { cur ->
+            ConfigStore.applySpaceStationPreset(cur, preset)
+        }
+        appendLog("已应用空间站预设: ${preset.label}")
+    }
+
+    fun exportSpaceStationConfigJson(): String {
+        return ConfigStore.exportSpaceStationJson(_config.value)
+    }
+
+    fun importSpaceStationConfigJson(context: Context, jsonText: String): Result<DriverConfig> {
+        val res = ConfigStore.importSpaceStationJson(jsonText, _config.value)
+        res.onSuccess { imported ->
+            _config.value = imported
+            ConfigStore.save(context, imported)
+            appendLog("已从剪贴板导入空间站配置")
+        }.onFailure { err ->
+            appendLog("导入空间站配置失败: ${err.message ?: "JSON 无效"}")
+        }
+        return res
     }
 
     internal fun updateOverlayState(running: Boolean) {

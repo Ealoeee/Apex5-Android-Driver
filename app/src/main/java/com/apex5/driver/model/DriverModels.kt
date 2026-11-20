@@ -21,6 +21,17 @@ enum class ExtraButtonId(val label: String) {
     RM("顶部小肩键 RM")
 }
 
+enum class StandardButtonId(val label: String, val defaultAction: MappingAction) {
+    A("A 键", MappingAction.A),
+    B("B 键", MappingAction.B),
+    X("X 键", MappingAction.X),
+    Y("Y 键", MappingAction.Y),
+    LB("LB 左肩键", MappingAction.LB),
+    RB("RB 右肩键", MappingAction.RB),
+    L3("L3 左摇杆下压", MappingAction.L3),
+    R3("R3 右摇杆下压", MappingAction.R3)
+}
+
 enum class MappingAction(val label: String) {
     NONE("不映射 (无)"),
     A("A 键"),
@@ -42,7 +53,8 @@ enum class MappingAction(val label: String) {
     DPAD_RIGHT("十字键 右"),
     GYRO_HOLD("按住启用陀螺仪瞄准"),
     GYRO_TOGGLE("开关切换陀螺仪瞄准"),
-    EXTRA_BUTTON("独立附加手柄键 (BUTTON_1~6)")
+    EXTRA_BUTTON("独立附加手柄键 (BUTTON_1~6)"),
+    RUN_MACRO("执行手柄连招宏")
 }
 
 enum class GyroTriggerMode(val label: String) {
@@ -63,6 +75,57 @@ enum class TouchOrientationMode(val label: String) {
     ROTATE_90("顺时针 90° 校准"),
     ROTATE_180("180° 校准"),
     ROTATE_270("逆时针 90° 校准")
+}
+
+enum class StickResponseCurve(val label: String, val shortLabel: String) {
+    LINEAR("默认线性 (1:1 真实手感)", "线性"),
+    FPS_PRECISION("FPS 精瞄 (S形缓起慢瞄)", "FPS精瞄"),
+    FAST_RESPONSE("敏捷爆发 (快起步响应)", "快起步"),
+    STABLE_DELAY("稳健防抖 (沉稳起步)", "防抖延迟")
+}
+
+enum class StickCircularityMode(val label: String, val shortLabel: String) {
+    CIRCLE("圆形调教 (精准控向 / FPS)", "圆形"),
+    RECTANGLE("矩形调教 (斜向跑满 100%)", "矩形")
+}
+
+data class StickTuningConfig(
+    val centerDeadzonePercent: Int = 4,
+    val centerCompensationPercent: Int = 0,
+    val outerDeadzonePercent: Int = 0,
+    val edgeCompensationPercent: Int = 0,
+    val curvePreset: StickResponseCurve = StickResponseCurve.LINEAR,
+    val circularityMode: StickCircularityMode = StickCircularityMode.CIRCLE,
+    val antiJitterEnabled: Boolean = false
+)
+
+enum class TriggerHapticMode(val label: String, val shortLabel: String) {
+    OFF("常规线性 (无力反馈震动)", "常规"),
+    SYNC_MAIN("跟随游戏握把震动", "跟随震动"),
+    SNIPER_CLICK("狙击破阻感 (半程清脆脉冲)", "狙击"),
+    MACHINE_GUN("机枪高频连震 (按住连振)", "机枪"),
+    RACING_PROGRESSIVE("赛车引擎渐进震动", "赛车")
+}
+
+data class TriggerTuningConfig(
+    val deadzoneStartPercent: Int = 2,
+    val deadzoneEndPercent: Int = 0,
+    val hairTriggerMode: Boolean = false,
+    val hapticMode: TriggerHapticMode = TriggerHapticMode.OFF,
+    val hapticStrengthPercent: Int = 75
+)
+
+data class GamepadMacroStep(
+    val action: MappingAction,
+    val holdMs: Int = 45,
+    val delayAfterMs: Int = 55
+)
+
+enum class SpaceStationPreset(val label: String, val desc: String) {
+    BALANCED("默认均衡", "4% 死区 · 线性摇杆 · 常规扳机"),
+    FPS_COMPETITIVE("FPS 竞技精瞄", "S形精瞄曲线 · 狙击扳机 + RT 扳机锁 · LT 陀螺仪"),
+    RACING_SIM("赛车拟真", "0% 死区 · 矩形边界 · LT/RT 渐进引擎震动"),
+    ACTION_COMBO("动作格斗", "快起步曲线 · 0% 中心补偿 · M1/M2 连发启用的高爆发模板")
 }
 
 enum class ControllerInputSource(val shortLabel: String, val label: String) {
@@ -152,12 +215,28 @@ data class DriverConfig(
         ExtraButtonId.LM to MappingAction.LB,
         ExtraButtonId.RM to MappingAction.RB
     ),
+    val faceButtonMappings: Map<StandardButtonId, MappingAction> = StandardButtonId.entries.associateWith { it.defaultAction },
+    val turboEnabledKeys: Set<ControllerInputSource> = emptySet(),
+    val turboRateHz: Int = 12,
+    val gamepadMacros: Map<ExtraButtonId, List<GamepadMacroStep>> = mapOf(
+        ExtraButtonId.M1 to listOf(
+            GamepadMacroStep(MappingAction.X, 40, 45),
+            GamepadMacroStep(MappingAction.A, 45, 50)
+        )
+    ),
+    val leftStick: StickTuningConfig = StickTuningConfig(),
+    val rightStick: StickTuningConfig = StickTuningConfig(),
+    val leftTrigger: TriggerTuningConfig = TriggerTuningConfig(),
+    val rightTrigger: TriggerTuningConfig = TriggerTuningConfig(),
+    val mainRumbleIntensityPercent: Int = 100,
+    val triggerRumbleIntensityPercent: Int = 80,
     val gyroTriggerMode: GyroTriggerMode = GyroTriggerMode.HOLD_LT,
     val gyroSensitivityX: Float = 1.8f,
     val gyroSensitivityY: Float = 1.5f,
     val gyroInvertX: Boolean = false,
     val gyroInvertY: Boolean = false,
-    val gyroDeadzoneDps: Float = 2.0f
+    val gyroDeadzoneDps: Float = 2.0f,
+    val gyroSmoothing: Float = 0.15f
 )
 
 data class LiveControllerState(

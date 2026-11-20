@@ -14,6 +14,8 @@ import com.apex5.driver.model.DriverOutputMode
 import com.apex5.driver.model.InputPreferenceMode
 import com.apex5.driver.model.LiveControllerState
 import com.apex5.driver.model.TouchProfile
+import com.apex5.driver.model.TriggerHapticMode
+import com.apex5.driver.model.TriggerTuningConfig
 import java.nio.ByteBuffer
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.TimeoutException
@@ -61,6 +63,15 @@ class Apex5UsbSession(
     private var lastEfMillis = 0L
     private var firmwareText = "--"
     private var batteryText = "--"
+
+    @Volatile
+    private var currentGripLow = 0
+    @Volatile
+    private var currentGripHigh = 0
+    @Volatile
+    private var currentTrigL = 0
+    @Volatile
+    private var currentTrigR = 0
 
     fun start(): Boolean {
         val conn = usbManager.openDevice(device)
@@ -131,19 +142,36 @@ class Apex5UsbSession(
         return true
     }
 
-    fun sendRumble(low: Int, high: Int) {
+    fun sendRumble(low: Int, high: Int, forceTriggerL: Int? = null, forceTriggerR: Int? = null) {
         if (!running.get()) return
         val cfg = configProvider()
+        val mainScale = cfg.mainRumbleIntensityPercent.coerceIn(0, 100) / 100f
+        val sLow = (low * mainScale).toInt().coerceIn(0, 255)
+        val sHigh = (high * mainScale).toInt().coerceIn(0, 255)
+        currentGripLow = sLow
+        currentGripHigh = sHigh
+
+        val trigScale = cfg.triggerRumbleIntensityPercent.coerceIn(0, 100) / 100f
+        val trigL = forceTriggerL ?: if (cfg.leftTrigger.hapticMode == TriggerHapticMode.SYNC_MAIN) {
+            (sLow * (cfg.leftTrigger.hapticStrengthPercent / 100f) * trigScale).toInt().coerceIn(0, 255)
+        } else currentTrigL
+        val trigR = forceTriggerR ?: if (cfg.rightTrigger.hapticMode == TriggerHapticMode.SYNC_MAIN) {
+            (sHigh * (cfg.rightTrigger.hapticStrengthPercent / 100f) * trigScale).toInt().coerceIn(0, 255)
+        } else currentTrigR
+
+        currentTrigL = trigL
+        currentTrigR = trigR
+
         val preferV2 = cfg.inputMode == InputPreferenceMode.AUTO_PREFER_ENHANCED && enhancedStreamActive && hidOutEp != null
         if (preferV2) {
             hidOutEp?.let { ep ->
-                pendingOutQueue.offer(ep to Apex5Protocol.buildRumbleV2Cmd(low, high))
+                pendingOutQueue.offer(ep to Apex5Protocol.buildRumbleV2Cmd(sLow, sHigh, trigL, trigR))
             }
         } else {
             xinputOutEp?.let { ep ->
-                pendingOutQueue.offer(ep to Apex5Protocol.buildRumbleXInputCmd(low, high))
+                pendingOutQueue.offer(ep to Apex5Protocol.buildRumbleXInputCmd(sLow, sHigh))
             } ?: hidOutEp?.let { ep ->
-                pendingOutQueue.offer(ep to Apex5Protocol.buildRumbleV2Cmd(low, high))
+                pendingOutQueue.offer(ep to Apex5Protocol.buildRumbleV2Cmd(sLow, sHigh, trigL, trigR))
             }
         }
     }
@@ -230,6 +258,83 @@ class Apex5UsbSession(
         var hasValidFrame = false
         var exitReason = "已停止"
 
+        var lastTrigHapticCheck = 0L
+        var prevLtTrigHigh = false
+        var prevRtTrigHigh = false
+        var ltPulseUntilMs = 0L
+        var rtPulseUntilMs = 0L
+
+        fun computeTriggerMotor(
+            rawVal: Int,
+            tCfg: TriggerTuningConfig,
+            globalScale: Float,
+            isLeft: Boolean,
+            nowMs: Long
+        ): Int {
+            val strength = (tCfg.hapticStrengthPercent.coerceIn(0, 100) / 100f) * globalScale
+            return when (tCfg.hapticMode) {
+                TriggerHapticMode.OFF -> 0
+                TriggerHapticMode.SYNC_MAIN -> {
+                    val base = if (isLeft) currentGripLow else currentGripHigh
+                    (base * strength).toInt().coerceIn(0, 255)
+                }
+                TriggerHapticMode.SNIPER_CLICK -> {
+                    val threshold = 115
+                    val high = rawVal >= threshold
+                    val prevHigh = if (isLeft) prevLtTrigHigh else prevRtTrigHigh
+                    if (high && !prevHigh) {
+                        if (isLeft) ltPulseUntilMs = nowMs + 48L else rtPulseUntilMs = nowMs + 48L
+                    }
+                    if (isLeft) prevLtTrigHigh = high else prevRtTrigHigh = high
+                    val activeUntil = if (isLeft) ltPulseUntilMs else rtPulseUntilMs
+                    if (nowMs < activeUntil) (235f * strength).toInt().coerceIn(0, 255) else 0
+                }
+                TriggerHapticMode.MACHINE_GUN -> {
+                    if (rawVal < 80) 0
+                    else {
+                        val phase = (nowMs % 62L) < 30L
+                        if (phase) (210f * strength).toInt().coerceIn(0, 255) else 0
+                    }
+                }
+                TriggerHapticMode.RACING_PROGRESSIVE -> {
+                    if (rawVal < 25) 0
+                    else {
+                        val frac = ((rawVal - 25) / 230f).coerceIn(0f, 1f)
+                        ((40f + frac * 190f) * strength).toInt().coerceIn(0, 255)
+                    }
+                }
+            }
+        }
+
+        fun updateTriggerHaptics(cfg: DriverConfig, nowMs: Long) {
+            if (!enhancedStreamActive || hidOutEp == null) return
+            if (nowMs - lastTrigHapticCheck < 22L) return
+            lastTrigHapticCheck = nowMs
+
+            val lMode = cfg.leftTrigger.hapticMode
+            val rMode = cfg.rightTrigger.hapticMode
+            if (lMode == TriggerHapticMode.OFF && rMode == TriggerHapticMode.OFF && currentTrigL == 0 && currentTrigR == 0) {
+                return
+            }
+            if (lMode == TriggerHapticMode.SYNC_MAIN && rMode == TriggerHapticMode.SYNC_MAIN) {
+                return
+            }
+
+            val globalScale = cfg.triggerRumbleIntensityPercent.coerceIn(0, 100) / 100f
+            val nextL = if (lMode == TriggerHapticMode.SYNC_MAIN) currentTrigL
+            else computeTriggerMotor(rawFrame.lt, cfg.leftTrigger, globalScale, true, nowMs)
+            val nextR = if (rMode == TriggerHapticMode.SYNC_MAIN) currentTrigR
+            else computeTriggerMotor(rawFrame.rt, cfg.rightTrigger, globalScale, false, nowMs)
+
+            if (nextL != currentTrigL || nextR != currentTrigR) {
+                currentTrigL = nextL
+                currentTrigR = nextR
+                hidOutEp?.let { ep ->
+                    pendingOutQueue.offer(ep to Apex5Protocol.buildRumbleV2Cmd(currentGripLow, currentGripHigh, nextL, nextR))
+                }
+            }
+        }
+
         fun handleDecodedFrame(cfg: DriverConfig, now: Long) {
             hasValidFrame = true
             pktCount++
@@ -250,6 +355,7 @@ class Apex5UsbSession(
                     onTouchOut(touchBytes)
                 }
             }
+            updateTriggerHaptics(cfg, now)
             if (live != null) {
                 lastUiEmit = now
                 onLiveState(live)

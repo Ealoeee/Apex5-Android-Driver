@@ -25,6 +25,19 @@ jobs:
           distribution: 'temurin'
           cache: 'gradle'
 
+      - name: Restore Persistent Signing Keystore
+        env:
+          APEX5_KEYSTORE_B64: ${{ secrets.APEX5_KEYSTORE_B64 }}
+          APEX5_STORE_PASSWORD: ${{ secrets.APEX5_STORE_PASSWORD }}
+          APEX5_KEY_ALIAS: ${{ secrets.APEX5_KEY_ALIAS }}
+          APEX5_KEY_PASSWORD: ${{ secrets.APEX5_KEY_PASSWORD }}
+        run: |
+          if [ -n "$APEX5_KEYSTORE_B64" ]; then
+            echo "$APEX5_KEYSTORE_B64" | base64 -d > app/apex5-signing.jks
+            printf "storeFile=apex5-signing.jks\nstorePassword=%s\nkeyAlias=%s\nkeyPassword=%s\n" \
+              "$APEX5_STORE_PASSWORD" "$APEX5_KEY_ALIAS" "$APEX5_KEY_PASSWORD" > signing.properties
+          fi
+
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 

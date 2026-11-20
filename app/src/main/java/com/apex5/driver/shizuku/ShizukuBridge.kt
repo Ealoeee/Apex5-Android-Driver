@@ -127,4 +127,16 @@ object ShizukuBridge {
         val svc = ensureBound() ?: return "Shizuku 未连接或未授权"
         return runCatching { svc.probePermissions() }.getOrElse { "探测异常: ${it.message}" }
     }
+
+    fun installApkViaShizuku(apkFile: java.io.File): Result<String> {
+        if (!apkFile.exists() || apkFile.length() <= 0L) {
+            return Result.failure(IllegalArgumentException("安装包文件不存在"))
+        }
+        val svc = ensureBound() ?: return Result.failure(IllegalStateException("Shizuku UserService 未就绪"))
+        return runCatching {
+            ParcelFileDescriptor.open(apkFile, ParcelFileDescriptor.MODE_READ_ONLY).use { pfd ->
+                svc.installApkFromFd(pfd, apkFile.length())
+            }
+        }
+    }
 }

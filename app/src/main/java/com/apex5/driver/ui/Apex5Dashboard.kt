@@ -41,6 +41,7 @@ import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Security
 import androidx.compose.material.icons.rounded.SportsEsports
 import androidx.compose.material.icons.rounded.Stop
+import androidx.compose.material.icons.rounded.SystemUpdate
 import androidx.compose.material.icons.rounded.Terminal
 import androidx.compose.material.icons.rounded.TouchApp
 import androidx.compose.material.icons.rounded.Tune
@@ -53,8 +54,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
-import androidx.compose.material3.Slider
-import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
@@ -84,21 +83,20 @@ import com.apex5.driver.BuildConfig
 import com.apex5.driver.model.DriverConfig
 import com.apex5.driver.model.DriverOutputMode
 import com.apex5.driver.model.DriverStatus
-import com.apex5.driver.model.ExtraButtonId
-import com.apex5.driver.model.GyroTriggerMode
-import com.apex5.driver.model.InputPreferenceMode
-import com.apex5.driver.model.MappingAction
 import com.apex5.driver.model.ShizukuState
+import com.apex5.driver.model.SpaceStationPreset
 import com.apex5.driver.model.TouchOrientationMode
 import com.apex5.driver.model.TouchProfile
+import com.apex5.driver.update.UpdateStage
+import com.apex5.driver.update.UpdateUiState
 import kotlin.math.abs
-import kotlin.math.roundToInt
 
 private enum class NavTab(val label: String, val shortLabel: String, val icon: ImageVector) {
     TELEMETRY("实时控制台", "控制台", Icons.Rounded.SportsEsports),
     TOUCH("触屏映射工作室", "触屏映射", Icons.Rounded.TouchApp),
-    TUNING("背键与体感调校", "背键调校", Icons.Rounded.Tune),
-    LOGS("诊断终端日志", "日志", Icons.Rounded.Terminal)
+    STICKS_TRIGGERS("摇杆与扳机", "摇杆扳机", Icons.Rounded.Tune),
+    BUTTONS_MACROS("按键·连发·宏", "按键宏", Icons.Rounded.Gamepad),
+    LOGS_UPDATE("更新与终端", "更新日志", Icons.Rounded.SystemUpdate)
 }
 
 @Composable
@@ -106,6 +104,7 @@ fun Apex5Dashboard(
     status: DriverStatus,
     config: DriverConfig,
     touchProfiles: List<TouchProfile>,
+    updateState: UpdateUiState,
     onRefresh: () -> Unit,
     onRequestShizuku: () -> Unit,
     onRequestUsb: () -> Unit,
@@ -125,10 +124,21 @@ fun Apex5Dashboard(
     onProbePermissions: () -> Unit,
     onClearLogs: () -> Unit,
     onTestRumble: () -> Unit,
+    onTestTriggerRumble: () -> Unit,
+    onApplySpacePreset: (SpaceStationPreset) -> Unit,
+    onExportSpaceJson: () -> String,
+    onImportSpaceJson: (String) -> Result<DriverConfig>,
+    onCheckUpdate: () -> Unit,
+    onDownloadUpdate: () -> Unit,
+    onInstallUpdateSystem: () -> Unit,
+    onInstallUpdateShizuku: () -> Unit,
+    onToggleUpdateMirror: (Boolean) -> Unit,
     onUpdateConfig: ((DriverConfig) -> DriverConfig) -> Unit
 ) {
     var selectedTabIndex by remember { mutableIntStateOf(0) }
     val selectedTab = NavTab.entries[selectedTabIndex]
+    val hasUpdateBadge = updateState.stage == UpdateStage.UPDATE_AVAILABLE ||
+        updateState.stage == UpdateStage.READY_TO_INSTALL
 
     BoxWithConstraints(
         modifier = Modifier
@@ -142,6 +152,7 @@ fun Apex5Dashboard(
             Row(modifier = Modifier.fillMaxSize()) {
                 TabletNavigationRail(
                     selectedTab = selectedTab,
+                    hasUpdateBadge = hasUpdateBadge,
                     onSelect = { selectedTabIndex = it.ordinal },
                     status = status,
                     onRefresh = onRefresh
@@ -179,6 +190,7 @@ fun Apex5Dashboard(
                             status = status,
                             config = config,
                             touchProfiles = touchProfiles,
+                            updateState = updateState,
                             onStartOverlay = onStartOverlay,
                             onStopOverlay = onStopOverlay,
                             onRequestOverlayPermission = onRequestOverlayPermission,
@@ -192,6 +204,15 @@ fun Apex5Dashboard(
                             onProbePermissions = onProbePermissions,
                             onClearLogs = onClearLogs,
                             onTestRumble = onTestRumble,
+                            onTestTriggerRumble = onTestTriggerRumble,
+                            onApplySpacePreset = onApplySpacePreset,
+                            onExportSpaceJson = onExportSpaceJson,
+                            onImportSpaceJson = onImportSpaceJson,
+                            onCheckUpdate = onCheckUpdate,
+                            onDownloadUpdate = onDownloadUpdate,
+                            onInstallUpdateSystem = onInstallUpdateSystem,
+                            onInstallUpdateShizuku = onInstallUpdateShizuku,
+                            onToggleUpdateMirror = onToggleUpdateMirror,
                             onUpdateConfig = onUpdateConfig
                         )
                     }
@@ -229,6 +250,7 @@ fun Apex5Dashboard(
                         status = status,
                         config = config,
                         touchProfiles = touchProfiles,
+                        updateState = updateState,
                         onStartOverlay = onStartOverlay,
                         onStopOverlay = onStopOverlay,
                         onRequestOverlayPermission = onRequestOverlayPermission,
@@ -242,13 +264,22 @@ fun Apex5Dashboard(
                         onProbePermissions = onProbePermissions,
                         onClearLogs = onClearLogs,
                         onTestRumble = onTestRumble,
+                        onTestTriggerRumble = onTestTriggerRumble,
+                        onApplySpacePreset = onApplySpacePreset,
+                        onExportSpaceJson = onExportSpaceJson,
+                        onImportSpaceJson = onImportSpaceJson,
+                        onCheckUpdate = onCheckUpdate,
+                        onDownloadUpdate = onDownloadUpdate,
+                        onInstallUpdateSystem = onInstallUpdateSystem,
+                        onInstallUpdateShizuku = onInstallUpdateShizuku,
+                        onToggleUpdateMirror = onToggleUpdateMirror,
                         onUpdateConfig = onUpdateConfig
                     )
                 }
 
                 PhoneBottomNavBar(
                     selectedTab = selectedTab,
-                    logCount = status.logs.size,
+                    hasUpdateBadge = hasUpdateBadge,
                     onSelect = { selectedTabIndex = it.ordinal }
                 )
             }
@@ -259,6 +290,7 @@ fun Apex5Dashboard(
 @Composable
 private fun TabletNavigationRail(
     selectedTab: NavTab,
+    hasUpdateBadge: Boolean,
     onSelect: (NavTab) -> Unit,
     status: DriverStatus,
     onRefresh: () -> Unit
@@ -295,7 +327,7 @@ private fun TabletNavigationRail(
                 Spacer(Modifier.width(10.dp))
                 Column {
                     Text("APEX 5 DRIVER", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                    Text("v${BuildConfig.VERSION_NAME} · USB / uinput", color = Apex5Palette.TextSecondary, fontSize = 11.sp)
+                    Text("v${BuildConfig.VERSION_NAME} · 空间站内核", color = Apex5Palette.TextSecondary, fontSize = 11.sp)
                 }
             }
 
@@ -325,13 +357,22 @@ private fun TabletNavigationRail(
                     )
                     Spacer(Modifier.width(10.dp))
                     Text(
-                        text = if (tab == NavTab.LOGS) "${tab.label} (${status.logs.size})" else tab.label,
+                        text = tab.label,
                         color = if (isSelected) Color.White else fg,
                         fontSize = 13.sp,
                         fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium,
                         maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f)
                     )
+                    if (tab == NavTab.LOGS_UPDATE && hasUpdateBadge) {
+                        Box(
+                            modifier = Modifier
+                                .size(8.dp)
+                                .clip(CircleShape)
+                                .background(Apex5Palette.Amber)
+                        )
+                    }
                 }
             }
         }
@@ -433,7 +474,7 @@ private fun CompactPhoneTopBar(status: DriverStatus, onRefresh: () -> Unit) {
 @Composable
 private fun PhoneBottomNavBar(
     selectedTab: NavTab,
-    logCount: Int,
+    hasUpdateBadge: Boolean,
     onSelect: (NavTab) -> Unit
 ) {
     Row(
@@ -441,7 +482,7 @@ private fun PhoneBottomNavBar(
             .fillMaxWidth()
             .background(Apex5Palette.RailBg)
             .border(1.dp, Apex5Palette.BorderSubtle)
-            .padding(horizontal = 6.dp, vertical = 6.dp),
+            .padding(horizontal = 4.dp, vertical = 6.dp),
         horizontalArrangement = Arrangement.SpaceEvenly
     ) {
         NavTab.entries.forEach { tab ->
@@ -456,12 +497,23 @@ private fun PhoneBottomNavBar(
                     .clickable { onSelect(tab) }
                     .padding(vertical = 6.dp)
             ) {
-                Icon(tab.icon, contentDescription = null, tint = color, modifier = Modifier.size(19.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(tab.icon, contentDescription = null, tint = color, modifier = Modifier.size(18.dp))
+                    if (tab == NavTab.LOGS_UPDATE && hasUpdateBadge) {
+                        Spacer(Modifier.width(3.dp))
+                        Box(
+                            modifier = Modifier
+                                .size(6.dp)
+                                .clip(CircleShape)
+                                .background(Apex5Palette.Amber)
+                        )
+                    }
+                }
                 Spacer(Modifier.height(2.dp))
                 Text(
-                    text = if (tab == NavTab.LOGS && logCount > 0) "${tab.shortLabel}($logCount)" else tab.shortLabel,
+                    text = tab.shortLabel,
                     color = color,
-                    fontSize = 10.5.sp,
+                    fontSize = 10.sp,
                     fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
                     maxLines = 1
                 )
@@ -735,6 +787,7 @@ private fun DashboardTabBody(
     status: DriverStatus,
     config: DriverConfig,
     touchProfiles: List<TouchProfile>,
+    updateState: UpdateUiState,
     onStartOverlay: (Boolean) -> Unit,
     onStopOverlay: () -> Unit,
     onRequestOverlayPermission: () -> Unit,
@@ -748,6 +801,15 @@ private fun DashboardTabBody(
     onProbePermissions: () -> Unit,
     onClearLogs: () -> Unit,
     onTestRumble: () -> Unit,
+    onTestTriggerRumble: () -> Unit,
+    onApplySpacePreset: (SpaceStationPreset) -> Unit,
+    onExportSpaceJson: () -> String,
+    onImportSpaceJson: (String) -> Result<DriverConfig>,
+    onCheckUpdate: () -> Unit,
+    onDownloadUpdate: () -> Unit,
+    onInstallUpdateSystem: () -> Unit,
+    onInstallUpdateShizuku: () -> Unit,
+    onToggleUpdateMirror: (Boolean) -> Unit,
     onUpdateConfig: ((DriverConfig) -> DriverConfig) -> Unit
 ) {
     when (selectedTab) {
@@ -769,18 +831,40 @@ private fun DashboardTabBody(
             onResetTouchPresets = onResetTouchPresets,
             onUpdateConfig = onUpdateConfig
         )
-        NavTab.TUNING -> TuningBentoView(
+        NavTab.STICKS_TRIGGERS -> StickAndTriggerSpaceView(
+            status = status,
             config = config,
-            serviceRunning = status.serviceRunning,
-            gyroAimActive = status.liveState.gyroAimActive,
             isWide = isWide,
-            onUpdateConfig = onUpdateConfig
+            onUpdateConfig = onUpdateConfig,
+            onTestTriggerRumble = onTestTriggerRumble
         )
-        NavTab.LOGS -> DiagnosticTerminalView(
-            logs = status.logs,
-            onProbePermissions = onProbePermissions,
-            onClearLogs = onClearLogs
+        NavTab.BUTTONS_MACROS -> ButtonsMacrosSpaceView(
+            status = status,
+            config = config,
+            isWide = isWide,
+            onUpdateConfig = onUpdateConfig,
+            onApplySpacePreset = onApplySpacePreset,
+            onExportSpaceJson = onExportSpaceJson,
+            onImportSpaceJson = onImportSpaceJson,
+            onTestRumble = onTestRumble,
+            onTestTriggerRumble = onTestTriggerRumble
         )
+        NavTab.LOGS_UPDATE -> Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            OtaUpdateCard(
+                updateState = updateState,
+                shizukuState = status.shizukuState,
+                onCheckUpdate = onCheckUpdate,
+                onDownloadUpdate = onDownloadUpdate,
+                onInstallUpdateSystem = onInstallUpdateSystem,
+                onInstallUpdateShizuku = onInstallUpdateShizuku,
+                onToggleMirror = onToggleUpdateMirror
+            )
+            DiagnosticTerminalView(
+                logs = status.logs,
+                onProbePermissions = onProbePermissions,
+                onClearLogs = onClearLogs
+            )
+        }
     }
 }
 
@@ -807,7 +891,8 @@ private fun TelemetryBentoView(
                     liveRx = live.rx,
                     liveRy = live.ry,
                     liveR3 = live.r3,
-                    deadzonePercent = config.stickDeadzonePercent,
+                    leftDeadzonePercent = config.leftStick.centerDeadzonePercent,
+                    rightDeadzonePercent = config.rightStick.centerDeadzonePercent,
                     modifier = Modifier.weight(1.1f)
                 )
                 ChannelAndTriggersCard(
@@ -824,7 +909,8 @@ private fun TelemetryBentoView(
                 liveRx = live.rx,
                 liveRy = live.ry,
                 liveR3 = live.r3,
-                deadzonePercent = config.stickDeadzonePercent
+                leftDeadzonePercent = config.leftStick.centerDeadzonePercent,
+                rightDeadzonePercent = config.rightStick.centerDeadzonePercent
             )
             ChannelAndTriggersCard(
                 status = status,
@@ -905,18 +991,19 @@ private fun SticksBentoCard(
     liveRx: Int,
     liveRy: Int,
     liveR3: Boolean,
-    deadzonePercent: Int,
+    leftDeadzonePercent: Int,
+    rightDeadzonePercent: Int,
     modifier: Modifier = Modifier
 ) {
     BentoCard(modifier = modifier) {
         Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
             BentoSectionHeader(
                 title = "双摇杆矢量 & 死区环",
-                subtitle = "虚线内圈代表当前 ${deadzonePercent}% 内死区范围",
+                subtitle = "虚线内圈代表当前左 ${leftDeadzonePercent}% / 右 ${rightDeadzonePercent}% 内死区",
                 icon = Icons.Rounded.SportsEsports,
                 accent = Apex5Palette.Cyan,
                 trailing = {
-                    StatusPillBadge(text = "死区 ${deadzonePercent}%", color = Apex5Palette.Cyan, pulseDot = false)
+                    StatusPillBadge(text = "L ${leftDeadzonePercent}% · R ${rightDeadzonePercent}%", color = Apex5Palette.Cyan, pulseDot = false)
                 }
             )
             Row(
@@ -924,8 +1011,8 @@ private fun SticksBentoCard(
                 horizontalArrangement = Arrangement.SpaceEvenly,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                StickDialVisualizer("左摇杆 LX / LY", liveLx, liveLy, liveL3, deadzonePercent)
-                StickDialVisualizer("右摇杆 RX / RY", liveRx, liveRy, liveR3, deadzonePercent)
+                StickDialVisualizer("左摇杆 LX / LY", liveLx, liveLy, liveL3, leftDeadzonePercent)
+                StickDialVisualizer("右摇杆 RX / RY", liveRx, liveRy, liveR3, rightDeadzonePercent)
             }
         }
     }
@@ -1241,215 +1328,6 @@ private fun TouchStudioView(
         }
 
         TouchBlueprintAndPadCard(profile = activeProfile, modifier = Modifier.fillMaxWidth())
-    }
-}
-
-@Composable
-private fun TuningBentoView(
-    config: DriverConfig,
-    serviceRunning: Boolean,
-    gyroAimActive: Boolean,
-    isWide: Boolean,
-    onUpdateConfig: ((DriverConfig) -> DriverConfig) -> Unit
-) {
-    val leftCol: @Composable (Modifier) -> Unit = { mod ->
-        Column(modifier = mod, verticalArrangement = Arrangement.spacedBy(14.dp)) {
-            BentoCard {
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    BentoSectionHeader(
-                        title = "USB 协议 & 手柄核心参数",
-                        subtitle = "0xEF HID URB 队列已升级至 8 深度缓冲",
-                        icon = Icons.Rounded.Usb,
-                        accent = Apex5Palette.Cyan
-                    )
-
-                    SleekDropdownRow(
-                        label = "USB 读取模式",
-                        currentText = config.inputMode.label,
-                        options = InputPreferenceMode.entries.map { it.label to it },
-                        onSelect = { mode -> onUpdateConfig { it.copy(inputMode = mode) } }
-                    )
-
-                    Column {
-                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text("摇杆内死区过滤", color = Apex5Palette.TextPrimary, fontSize = 13.5.sp)
-                            Text("${config.stickDeadzonePercent}%", color = Apex5Palette.Cyan, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
-                        }
-                        Slider(
-                            value = config.stickDeadzonePercent.toFloat(),
-                            onValueChange = { v -> onUpdateConfig { it.copy(stickDeadzonePercent = v.roundToInt()) } },
-                            valueRange = 0f..20f,
-                            steps = 19,
-                            colors = SliderDefaults.colors(thumbColor = Apex5Palette.Cyan, activeTrackColor = Apex5Palette.Cyan)
-                        )
-                    }
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("独立附加按键虚拟设备 (BUTTON_1~6)", color = Apex5Palette.TextPrimary, fontSize = 13.5.sp)
-                            Text(
-                                if (serviceRunning) "修改后需重启驱动生效 · 用于模拟器独立识别 M1~M4"
-                                else "开启后可在模拟器里单独绑定映射为「附加手柄键」的背键",
-                                color = Apex5Palette.TextMuted,
-                                fontSize = 11.sp
-                            )
-                        }
-                        Switch(
-                            checked = config.enableExtraButtonDevice,
-                            onCheckedChange = { checked -> onUpdateConfig { it.copy(enableExtraButtonDevice = checked) } },
-                            colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = Apex5Palette.Cyan)
-                        )
-                    }
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("屏蔽 Home (Guide) 全局切桌面", color = Apex5Palette.TextPrimary, fontSize = 13.5.sp)
-                            Text("仅在测试面板显示状态，避免误触 LOGO 键切出游戏", color = Apex5Palette.TextMuted, fontSize = 11.sp)
-                        }
-                        Switch(
-                            checked = config.blockHomeButton,
-                            onCheckedChange = { checked -> onUpdateConfig { it.copy(blockHomeButton = checked) } },
-                            colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = Apex5Palette.Cyan)
-                        )
-                    }
-                }
-            }
-
-            BentoCard {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    BentoSectionHeader(
-                        title = "M1–M4 背键 & LM / RM 肩键重映射",
-                        subtitle = "原生手柄模式下实时生效（需开启第三方接管获得 0xEF）",
-                        icon = Icons.Rounded.Gamepad,
-                        accent = Apex5Palette.Violet
-                    )
-                    ExtraButtonId.entries.forEach { btnId ->
-                        val current = config.buttonMappings[btnId] ?: MappingAction.NONE
-                        SleekDropdownRow(
-                            label = btnId.label,
-                            currentText = current.label,
-                            options = MappingAction.entries.map { it.label to it },
-                            onSelect = { action ->
-                                onUpdateConfig { cur ->
-                                    cur.copy(buttonMappings = cur.buttonMappings + (btnId to action))
-                                }
-                            }
-                        )
-                    }
-                }
-            }
-        }
-    }
-
-    val gyroCard: @Composable (Modifier) -> Unit = { mod ->
-        BentoCard(modifier = mod) {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                BentoSectionHeader(
-                    title = "陀螺仪体感辅助瞄准 (Gyro → Right Stick)",
-                    subtitle = "同步作用于 Xbox 右摇杆与触屏 FPS 视角滑动区",
-                    icon = Icons.Rounded.Explore,
-                    accent = Apex5Palette.Violet,
-                    trailing = {
-                        StatusPillBadge(
-                            text = if (gyroAimActive) "瞄准激活" else "待命",
-                            color = if (gyroAimActive) Apex5Palette.Emerald else Apex5Palette.TextMuted
-                        )
-                    }
-                )
-
-                SleekDropdownRow(
-                    label = "触发方式",
-                    currentText = config.gyroTriggerMode.label,
-                    options = GyroTriggerMode.entries.map { it.label to it },
-                    onSelect = { mode -> onUpdateConfig { it.copy(gyroTriggerMode = mode) } }
-                )
-
-                Column {
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text("水平灵敏度 (Yaw → X)", color = Apex5Palette.TextPrimary, fontSize = 13.5.sp)
-                        Text("%.2fx".format(config.gyroSensitivityX), color = Apex5Palette.Violet, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
-                    }
-                    Slider(
-                        value = config.gyroSensitivityX,
-                        onValueChange = { v -> onUpdateConfig { it.copy(gyroSensitivityX = v) } },
-                        valueRange = 0.2f..5.0f,
-                        colors = SliderDefaults.colors(thumbColor = Apex5Palette.Violet, activeTrackColor = Apex5Palette.Violet)
-                    )
-                }
-
-                Column {
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text("垂直灵敏度 (Pitch → Y)", color = Apex5Palette.TextPrimary, fontSize = 13.5.sp)
-                        Text("%.2fx".format(config.gyroSensitivityY), color = Apex5Palette.Violet, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
-                    }
-                    Slider(
-                        value = config.gyroSensitivityY,
-                        onValueChange = { v -> onUpdateConfig { it.copy(gyroSensitivityY = v) } },
-                        valueRange = 0.2f..5.0f,
-                        colors = SliderDefaults.colors(thumbColor = Apex5Palette.Violet, activeTrackColor = Apex5Palette.Violet)
-                    )
-                }
-
-                Column {
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text("防抖死区阈值", color = Apex5Palette.TextPrimary, fontSize = 13.5.sp)
-                        Text("%.1f °/s".format(config.gyroDeadzoneDps), color = Apex5Palette.Cyan, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
-                    }
-                    Slider(
-                        value = config.gyroDeadzoneDps,
-                        onValueChange = { v -> onUpdateConfig { it.copy(gyroDeadzoneDps = v) } },
-                        valueRange = 0f..15f,
-                        colors = SliderDefaults.colors(thumbColor = Apex5Palette.Cyan, activeTrackColor = Apex5Palette.Cyan)
-                    )
-                }
-
-                HorizontalDivider(color = Apex5Palette.BorderSubtle)
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("反转水平轴", color = Apex5Palette.TextPrimary, fontSize = 13.sp)
-                        Spacer(Modifier.width(8.dp))
-                        Switch(
-                            checked = config.gyroInvertX,
-                            onCheckedChange = { inv -> onUpdateConfig { it.copy(gyroInvertX = inv) } },
-                            colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = Apex5Palette.Violet)
-                        )
-                    }
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("反转垂直轴", color = Apex5Palette.TextPrimary, fontSize = 13.sp)
-                        Spacer(Modifier.width(8.dp))
-                        Switch(
-                            checked = config.gyroInvertY,
-                            onCheckedChange = { inv -> onUpdateConfig { it.copy(gyroInvertY = inv) } },
-                            colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = Apex5Palette.Violet)
-                        )
-                    }
-                }
-            }
-        }
-    }
-
-    if (isWide) {
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-            leftCol(Modifier.weight(1.05f))
-            gyroCard(Modifier.weight(0.95f))
-        }
-    } else {
-        Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-            leftCol(Modifier.fillMaxWidth())
-            gyroCard(Modifier.fillMaxWidth())
-        }
     }
 }
 

@@ -1,8 +1,32 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
 }
+
+val signingProps = Properties().apply {
+    val propsFile = rootProject.file("signing.properties")
+    if (propsFile.exists()) {
+        propsFile.inputStream().use { load(it) }
+    }
+}
+
+val persistentStoreFilePath: String? =
+    System.getenv("APEX5_KEYSTORE_PATH") ?: signingProps.getProperty("storeFile")
+val persistentStoreFile = persistentStoreFilePath?.let { file(it) }?.takeIf { it.exists() }
+val persistentStorePass: String? =
+    System.getenv("APEX5_STORE_PASSWORD") ?: signingProps.getProperty("storePassword")
+val persistentKeyAlias: String? =
+    System.getenv("APEX5_KEY_ALIAS") ?: signingProps.getProperty("keyAlias")
+val persistentKeyPass: String? =
+    System.getenv("APEX5_KEY_PASSWORD") ?: signingProps.getProperty("keyPassword")
+
+val hasPersistentSigning = persistentStoreFile != null &&
+    !persistentStorePass.isNullOrBlank() &&
+    !persistentKeyAlias.isNullOrBlank() &&
+    !persistentKeyPass.isNullOrBlank()
 
 android {
     namespace = "com.apex5.driver"
@@ -13,8 +37,8 @@ android {
         applicationId = "com.apex5.driver"
         minSdk = 28
         targetSdk = 35
-        versionCode = 3
-        versionName = "0.3.0"
+        versionCode = 4
+        versionName = "0.4.0"
 
         ndk {
             abiFilters += listOf("arm64-v8a", "armeabi-v7a")
@@ -27,8 +51,27 @@ android {
         }
     }
 
+    signingConfigs {
+        if (hasPersistentSigning) {
+            create("persistent") {
+                storeFile = persistentStoreFile
+                storePassword = persistentStorePass
+                keyAlias = persistentKeyAlias
+                keyPassword = persistentKeyPass
+            }
+        }
+    }
+
     buildTypes {
+        debug {
+            if (hasPersistentSigning) {
+                signingConfig = signingConfigs.getByName("persistent")
+            }
+        }
         release {
+            if (hasPersistentSigning) {
+                signingConfig = signingConfigs.getByName("persistent")
+            }
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),

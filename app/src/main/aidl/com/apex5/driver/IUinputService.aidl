@@ -16,4 +16,5 @@ interface IUinputService {
     void stopSession() = 2;
     boolean isRunning() = 3;
     String probePermissions() = 4;
+    String installApkFromFd(in ParcelFileDescriptor apkFd, long sizeBytes) = 5;
 }

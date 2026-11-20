@@ -293,7 +293,7 @@ class TouchMapperEngine {
                     }
                     return
                 }
-                val (sx, sy) = readStickNormalized(node.input, raw, config.stickDeadzonePercent)
+                val (sx, sy) = readStickNormalized(node.input, raw, config)
                 val rt = joystickRuntimes.getOrPut(node.id) { JoystickRuntime() }
                 if (sx == 0f && sy == 0f) {
                     rt.touching = false
@@ -317,7 +317,7 @@ class TouchMapperEngine {
                     cameraRuntimes[node.id]?.touching = false
                     return
                 }
-                val (sx, sy) = readStickNormalized(node.input, raw, config.stickDeadzonePercent)
+                val (sx, sy) = readStickNormalized(node.input, raw, config)
                 val rt = cameraRuntimes.getOrPut(node.id) { CameraSwipeRuntime() }
 
                 var vx = sx * 1.15f * node.sensitivity
@@ -394,18 +394,12 @@ class TouchMapperEngine {
     private fun readStickNormalized(
         input: ControllerInputSource,
         raw: MutableRawFrame,
-        deadzonePercent: Int
+        config: DriverConfig
     ): Pair<Float, Float> {
-        val (rx, ry) = when (input) {
-            ControllerInputSource.RIGHT_STICK -> raw.rx to raw.ry
-            else -> raw.lx to raw.ly
+        return when (input) {
+            ControllerInputSource.RIGHT_STICK -> StickMath.shapeStick(raw.rx, raw.ry, config.rightStick)
+            else -> StickMath.shapeStick(raw.lx, raw.ly, config.leftStick)
         }
-        val dz = (deadzonePercent / 100.0f) * 32767.0f
-        val mag = hypot(rx.toFloat(), ry.toFloat())
-        if (mag <= dz || mag < 1f) return 0f to 0f
-        val norm = ((mag - dz) / (32767.0f - dz)).coerceIn(0f, 1f)
-        val scale = norm / mag
-        return (rx * scale) to (ry * scale)
     }
 
     private fun isInputPressed(input: ControllerInputSource, raw: MutableRawFrame): Boolean {
