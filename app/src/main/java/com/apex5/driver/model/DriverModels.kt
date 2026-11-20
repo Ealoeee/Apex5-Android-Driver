@@ -143,6 +143,7 @@ enum class ControllerInputSource(val shortLabel: String, val label: String) {
     R3("R3", "R3 右摇杆按下"),
     BACK("Back", "Back / View"),
     START("Start", "Start / Menu"),
+    HOME("⌂", "房子键 (HOME)"),
     DPAD_UP("↑", "十字键 上"),
     DPAD_DOWN("↓", "十字键 下"),
     DPAD_LEFT("←", "十字键 左"),

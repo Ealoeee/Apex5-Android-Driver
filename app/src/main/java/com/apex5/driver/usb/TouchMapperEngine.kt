@@ -439,6 +439,7 @@ class TouchMapperEngine {
             ControllerInputSource.R3 -> raw.r3
             ControllerInputSource.BACK -> raw.back
             ControllerInputSource.START -> raw.start
+            ControllerInputSource.HOME -> raw.home
             ControllerInputSource.DPAD_UP -> raw.hatY < 0
             ControllerInputSource.DPAD_DOWN -> raw.hatY > 0
             ControllerInputSource.DPAD_LEFT -> raw.hatX < 0

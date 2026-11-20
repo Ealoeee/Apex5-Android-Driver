@@ -2,6 +2,14 @@
 
 All notable changes to **Apex5-Android-Driver** are documented in this file.
 
+## [v0.5.1] - 2026-11-20
+
+### Added
+- **新增手柄「房子键 (`HOME` / ⌂)」触屏映射支持**：
+  - 在 [`ControllerInputSource`](app/src/main/java/com/apex5/driver/model/DriverModels.kt) 中新增 `HOME`（房子键），支持在悬浮编辑器的 `＋ 添加` 面板点选「⌂ 房子」或直接按下手柄实体 **Home 小房子键** 识别添加。
+  - 在 [`TouchMapperEngine`](app/src/main/java/com/apex5/driver/usb/TouchMapperEngine.kt) 与编辑器实时测试模式中完整接管 `raw.home` 信号，并在悬浮圆环内绘制高清白色房子矢量图标。
+  - 升级内置 `moba_default` 王者荣耀预设，默认在底部 **回城（小房子）** 位置绑定 `HOME` 房子键。
+
 ## [v0.5.0] - 2026-11-20
 
 ### Added

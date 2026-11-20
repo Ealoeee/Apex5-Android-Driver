@@ -216,6 +216,14 @@ object TouchProfileStore {
                     radiusNorm = 0.040f
                 ),
                 TouchNodeConfig(
+                    id = "m_home",
+                    input = ControllerInputSource.HOME,
+                    kind = TouchNodeKind.TAP,
+                    xNorm = 0.50f,
+                    yNorm = 0.86f,
+                    radiusNorm = 0.034f
+                ),
+                TouchNodeConfig(
                     id = "m_b",
                     input = ControllerInputSource.B,
                     kind = TouchNodeKind.TAP,

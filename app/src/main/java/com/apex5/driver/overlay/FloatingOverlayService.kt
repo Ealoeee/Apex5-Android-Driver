@@ -465,7 +465,11 @@ class FloatingOverlayService : Service() {
                 return
             }
             inspectorScroll.visibility = View.VISIBLE
-            selectedTitle.text = node.overlayLabel()
+            selectedTitle.text = if (node.input == ControllerInputSource.HOME && node.modifierInput == null) {
+                "⌂ 房子键"
+            } else {
+                node.overlayLabel()
+            }
             kindBtn.text = "类型: ${node.kind.label.substringBefore(" ")}"
             modBtn.text = if (node.modifierInput != null) "组合: ${node.modifierInput.shortLabel}+" else "组合: 单键"
             gyroBtn.visibility = if (node.kind == TouchNodeKind.CAMERA_SWIPE) View.VISIBLE else View.GONE
@@ -832,7 +836,8 @@ class FloatingOverlayService : Service() {
         val hScroll = HorizontalScrollView(this)
         val btnStrip = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         ControllerInputSource.entries.forEach { src ->
-            val b = makeMiniBtn(src.shortLabel, "#1E293B", "#F8FAFC") {
+            val btnLabel = if (src == ControllerInputSource.HOME) "⌂ 房子" else src.shortLabel
+            val b = makeMiniBtn(btnLabel, "#1E293B", "#F8FAFC") {
                 addInputNode(src)
             }
             btnStrip.addView(b)
@@ -1149,6 +1154,7 @@ class FloatingOverlayService : Service() {
             cur.rt >= 100 && prev.rt < 100 -> ControllerInputSource.RT
             cur.l3 && !prev.l3 -> ControllerInputSource.L3
             cur.r3 && !prev.r3 -> ControllerInputSource.R3
+            cur.home && !prev.home -> ControllerInputSource.HOME
             cur.m1 && !prev.m1 -> ControllerInputSource.M1
             cur.m2 && !prev.m2 -> ControllerInputSource.M2
             cur.m3 && !prev.m3 -> ControllerInputSource.M3
@@ -1368,9 +1374,13 @@ class FloatingOverlayService : Service() {
                         ringPaint.alpha = ringAlpha
                         canvas.drawCircle(cx, cy, r, ringPaint)
 
-                        val label = n.overlayLabel()
-                        textPaint.textSize = if (label.length >= 4) (r * 0.44f).coerceIn(15f, 24f) else (r * 0.58f).coerceIn(18f, 32f)
-                        canvas.drawText(label, cx, cy + textPaint.textSize * 0.35f, textPaint)
+                        if (n.input == ControllerInputSource.HOME && n.modifierInput == null) {
+                            drawHouseIcon(canvas, cx, cy, (r * 0.46f).coerceIn(11f, 24f), ringAlpha, arrowPaint, chevronPath)
+                        } else {
+                            val label = n.overlayLabel()
+                            textPaint.textSize = if (label.length >= 4) (r * 0.44f).coerceIn(15f, 24f) else (r * 0.58f).coerceIn(18f, 32f)
+                            canvas.drawText(label, cx, cy + textPaint.textSize * 0.35f, textPaint)
+                        }
                     }
                 }
             }
@@ -1669,16 +1679,22 @@ class FloatingOverlayService : Service() {
                 }
 
                 // Label + subtle sub-tag for special types
-                val trigLabel = n.overlayLabel()
-                labelPaint.alpha = (alphaFactor * 255f).roundToInt().coerceIn(0, 255)
-                labelPaint.textSize = when {
-                    n.kind == TouchNodeKind.JOYSTICK -> (r * 0.34f).coerceIn(22f, 44f)
-                    trigLabel.length >= 4 -> (r * 0.42f).coerceIn(16f, 24f)
-                    else -> (r * 0.54f).coerceIn(20f, 34f)
-                }
                 val showSubTag = n.kind == TouchNodeKind.RAPID_TAP || n.kind == TouchNodeKind.MACRO || n.kind == TouchNodeKind.SKILL_AIM
-                val labelYOffset = if (showSubTag) -4f else labelPaint.textSize * 0.35f
-                canvas.drawText(trigLabel, cx, cy + labelYOffset, labelPaint)
+                if (n.input == ControllerInputSource.HOME && n.modifierInput == null) {
+                    val iconCenterY = if (showSubTag) cy - r * 0.16f else cy
+                    val iconAlpha = (alphaFactor * 255f).roundToInt().coerceIn(0, 255)
+                    drawHouseIcon(canvas, cx, iconCenterY, (r * 0.44f).coerceIn(11f, 24f), iconAlpha, arrowPaint, chevronPath)
+                } else {
+                    val trigLabel = n.overlayLabel()
+                    labelPaint.alpha = (alphaFactor * 255f).roundToInt().coerceIn(0, 255)
+                    labelPaint.textSize = when {
+                        n.kind == TouchNodeKind.JOYSTICK -> (r * 0.34f).coerceIn(22f, 44f)
+                        trigLabel.length >= 4 -> (r * 0.42f).coerceIn(16f, 24f)
+                        else -> (r * 0.54f).coerceIn(20f, 34f)
+                    }
+                    val labelYOffset = if (showSubTag) -4f else labelPaint.textSize * 0.35f
+                    canvas.drawText(trigLabel, cx, cy + labelYOffset, labelPaint)
+                }
 
                 if (showSubTag) {
                     subPaint.alpha = (alphaFactor * 220f).roundToInt().coerceIn(0, 255)
@@ -1986,6 +2002,46 @@ private fun drawCardinalChevrons(
     canvas.drawPath(path, paint)
 }
 
+private fun drawHouseIcon(
+    canvas: Canvas,
+    cx: Float,
+    cy: Float,
+    halfSize: Float,
+    alpha: Int,
+    basePaint: Paint,
+    path: Path
+) {
+    val prevColor = basePaint.color
+    val prevAlpha = basePaint.alpha
+    val prevWidth = basePaint.strokeWidth
+    basePaint.color = Color.WHITE
+    basePaint.alpha = alpha
+    basePaint.strokeWidth = (halfSize * 0.22f).coerceIn(2.6f, 4.5f)
+
+    // Roof + house outline
+    path.reset()
+    path.moveTo(cx - halfSize * 0.95f, cy - halfSize * 0.05f)
+    path.lineTo(cx, cy - halfSize * 0.88f)
+    path.lineTo(cx + halfSize * 0.95f, cy - halfSize * 0.05f)
+    path.moveTo(cx - halfSize * 0.68f, cy - halfSize * 0.12f)
+    path.lineTo(cx - halfSize * 0.68f, cy + halfSize * 0.80f)
+    path.lineTo(cx + halfSize * 0.68f, cy + halfSize * 0.80f)
+    path.lineTo(cx + halfSize * 0.68f, cy - halfSize * 0.12f)
+    canvas.drawPath(path, basePaint)
+
+    // Small door notch
+    path.reset()
+    path.moveTo(cx - halfSize * 0.22f, cy + halfSize * 0.80f)
+    path.lineTo(cx - halfSize * 0.22f, cy + halfSize * 0.32f)
+    path.lineTo(cx + halfSize * 0.22f, cy + halfSize * 0.32f)
+    path.lineTo(cx + halfSize * 0.22f, cy + halfSize * 0.80f)
+    canvas.drawPath(path, basePaint)
+
+    basePaint.color = prevColor
+    basePaint.alpha = prevAlpha
+    basePaint.strokeWidth = prevWidth
+}
+
 private fun isInputPressedLive(src: ControllerInputSource, live: LiveControllerState): Boolean {
     return when (src) {
         ControllerInputSource.LEFT_STICK -> hypot(live.lx / 32767f, live.ly / 32767f) > 0.08f
@@ -2002,6 +2058,7 @@ private fun isInputPressedLive(src: ControllerInputSource, live: LiveControllerS
         ControllerInputSource.R3 -> live.r3
         ControllerInputSource.BACK -> live.back
         ControllerInputSource.START -> live.start
+        ControllerInputSource.HOME -> live.home
         ControllerInputSource.DPAD_UP -> live.hatY < 0
         ControllerInputSource.DPAD_DOWN -> live.hatY > 0
         ControllerInputSource.DPAD_LEFT -> live.hatX < 0
