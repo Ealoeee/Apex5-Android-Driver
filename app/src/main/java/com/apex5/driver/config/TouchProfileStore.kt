@@ -165,68 +165,89 @@ object TouchProfileStore {
         ),
         TouchProfile(
             id = "moba_default",
-            name = "MOBA 预设 (王者/英雄联盟)",
+            name = "MOBA 预设 (王者荣耀 · 技能指向)",
             nodes = listOf(
                 TouchNodeConfig(
                     id = "m_ls",
                     input = ControllerInputSource.LEFT_STICK,
                     kind = TouchNodeKind.JOYSTICK,
-                    xNorm = 0.16f,
+                    xNorm = 0.17f,
                     yNorm = 0.73f,
-                    radiusNorm = 0.10f
+                    radiusNorm = 0.11f
                 ),
                 TouchNodeConfig(
                     id = "m_a",
                     input = ControllerInputSource.A,
                     kind = TouchNodeKind.TAP,
-                    xNorm = 0.88f,
-                    yNorm = 0.81f,
+                    xNorm = 0.87f,
+                    yNorm = 0.80f,
                     radiusNorm = 0.055f
                 ),
                 TouchNodeConfig(
                     id = "m_x",
                     input = ControllerInputSource.X,
-                    kind = TouchNodeKind.TAP,
-                    xNorm = 0.76f,
-                    yNorm = 0.84f,
-                    radiusNorm = 0.045f
+                    kind = TouchNodeKind.SKILL_AIM,
+                    xNorm = 0.72f,
+                    yNorm = 0.85f,
+                    radiusNorm = 0.042f
                 ),
                 TouchNodeConfig(
                     id = "m_y",
                     input = ControllerInputSource.Y,
-                    kind = TouchNodeKind.TAP,
-                    xNorm = 0.80f,
-                    yNorm = 0.66f,
-                    radiusNorm = 0.045f
+                    kind = TouchNodeKind.SKILL_AIM,
+                    xNorm = 0.78f,
+                    yNorm = 0.67f,
+                    radiusNorm = 0.042f
                 ),
                 TouchNodeConfig(
                     id = "m_rb",
                     input = ControllerInputSource.RB,
-                    kind = TouchNodeKind.TAP,
-                    xNorm = 0.90f,
+                    kind = TouchNodeKind.SKILL_AIM,
+                    xNorm = 0.88f,
                     yNorm = 0.56f,
-                    radiusNorm = 0.045f
+                    radiusNorm = 0.042f
+                ),
+                TouchNodeConfig(
+                    id = "m_rt",
+                    input = ControllerInputSource.RT,
+                    kind = TouchNodeKind.SKILL_AIM,
+                    xNorm = 0.69f,
+                    yNorm = 0.67f,
+                    radiusNorm = 0.040f
                 ),
                 TouchNodeConfig(
                     id = "m_b",
                     input = ControllerInputSource.B,
                     kind = TouchNodeKind.TAP,
-                    xNorm = 0.69f,
+                    xNorm = 0.62f,
                     yNorm = 0.88f,
-                    radiusNorm = 0.04f
+                    radiusNorm = 0.036f
                 ),
                 TouchNodeConfig(
-                    id = "m_m1_combo",
-                    input = ControllerInputSource.X,
-                    modifierInput = ControllerInputSource.LT,
-                    kind = TouchNodeKind.MACRO,
-                    xNorm = 0.84f,
-                    yNorm = 0.34f,
-                    radiusNorm = 0.04f,
-                    macroSteps = listOf(
-                        MacroStep(0.84f, 0.34f, 40, 50),
-                        MacroStep(0.80f, 0.66f, 45, 50)
-                    )
+                    id = "m_m1",
+                    input = ControllerInputSource.M1,
+                    kind = TouchNodeKind.TAP,
+                    xNorm = 0.88f,
+                    yNorm = 0.39f,
+                    radiusNorm = 0.038f
+                ),
+                TouchNodeConfig(
+                    id = "m_lb_y",
+                    input = ControllerInputSource.Y,
+                    modifierInput = ControllerInputSource.LB,
+                    kind = TouchNodeKind.TAP,
+                    xNorm = 0.89f,
+                    yNorm = 0.19f,
+                    radiusNorm = 0.032f
+                ),
+                TouchNodeConfig(
+                    id = "m_lb_b",
+                    input = ControllerInputSource.B,
+                    modifierInput = ControllerInputSource.LB,
+                    kind = TouchNodeKind.TAP,
+                    xNorm = 0.89f,
+                    yNorm = 0.27f,
+                    radiusNorm = 0.032f
                 )
             )
         ),

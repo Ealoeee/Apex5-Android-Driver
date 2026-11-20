@@ -312,6 +312,27 @@ class TouchMapperEngine {
                 }
             }
 
+            TouchNodeKind.SKILL_AIM -> {
+                val rt = joystickRuntimes.getOrPut(node.id) { JoystickRuntime() }
+                if (!isNodeTriggered(node, raw)) {
+                    rt.touching = false
+                    rt.downFrames = 0
+                    return
+                }
+                if (!rt.touching) {
+                    rt.touching = true
+                    rt.downFrames = 0
+                }
+                // Frame 0 anchors on the skill button icon; subsequent frames aim via Right Stick
+                val factor = if (rt.downFrames == 0) 0f else 1f
+                rt.downFrames++
+                val (rx, ry) = StickMath.shapeStick(raw.rx, raw.ry, config.rightStick)
+                val aimRange = (node.radiusNorm * 1.45f).coerceIn(0.06f, 0.28f)
+                out.active = true
+                out.x = (node.xNorm + rx * aimRange * factor).coerceIn(0.01f, 0.99f)
+                out.y = (node.yNorm + ry * aimRange * factor).coerceIn(0.01f, 0.99f)
+            }
+
             TouchNodeKind.CAMERA_SWIPE -> {
                 if (node.modifierInput != null && !isInputPressed(node.modifierInput, raw)) {
                     cameraRuntimes[node.id]?.touching = false

@@ -54,6 +54,8 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
@@ -90,6 +92,7 @@ import com.apex5.driver.model.TouchProfile
 import com.apex5.driver.update.UpdateStage
 import com.apex5.driver.update.UpdateUiState
 import kotlin.math.abs
+import kotlin.math.roundToInt
 
 private enum class NavTab(val label: String, val shortLabel: String, val icon: ImageVector) {
     TELEMETRY("实时控制台", "控制台", Icons.Rounded.SportsEsports),
@@ -1297,13 +1300,41 @@ private fun TouchStudioView(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
-                            Text("触屏模式显示半透明键位提示", color = Apex5Palette.TextPrimary, fontSize = 13.5.sp)
-                            Text("叠加提示气泡（含 LT+X 组合标签），不拦截真实手指触控", color = Apex5Palette.TextMuted, fontSize = 11.sp)
+                            Text("触屏模式显示悬浮键位圈", color = Apex5Palette.TextPrimary, fontSize = 13.5.sp)
+                            Text("超细霓虹环贴合游戏图标，不拦截真实手指触控", color = Apex5Palette.TextMuted, fontSize = 11.sp)
                         }
                         Switch(
                             checked = config.showTouchHints,
                             onCheckedChange = { show -> onUpdateConfig { it.copy(showTouchHints = show) } },
                             colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = Apex5Palette.Cyan)
+                        )
+                    }
+
+                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text("悬浮键位提示透明度", color = Apex5Palette.TextPrimary, fontSize = 13.sp)
+                            Text(
+                                text = "${config.touchHintsOpacityPercent}%",
+                                color = Apex5Palette.Cyan,
+                                fontSize = 12.5.sp,
+                                fontWeight = FontWeight.Bold,
+                                fontFamily = FontFamily.Monospace
+                            )
+                        }
+                        Slider(
+                            value = config.touchHintsOpacityPercent.toFloat(),
+                            onValueChange = { v ->
+                                onUpdateConfig { it.copy(touchHintsOpacityPercent = v.roundToInt().coerceIn(0, 100)) }
+                            },
+                            valueRange = 0f..100f,
+                            colors = SliderDefaults.colors(
+                                thumbColor = Apex5Palette.Cyan,
+                                activeTrackColor = Apex5Palette.Cyan
+                            )
                         )
                     }
 

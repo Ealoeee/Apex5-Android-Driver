@@ -158,9 +158,10 @@ enum class ControllerInputSource(val shortLabel: String, val label: String) {
 enum class TouchNodeKind(val label: String) {
     TAP("点击 / 长按"),
     RAPID_TAP("连发点击"),
-    JOYSTICK("轮盘摇杆 / 技能拖拽"),
+    JOYSTICK("轮盘摇杆 (LS/RS)"),
     CAMERA_SWIPE("FPS 视角滑动 (无限转向 + 陀螺仪)"),
-    MACRO("序列宏 (多步连点)")
+    MACRO("序列宏 (多步连点)"),
+    SKILL_AIM("技能指向 (按住 + 右摇杆瞄准)")
 }
 
 data class MacroStep(
@@ -190,6 +191,24 @@ data class TouchNodeConfig(
             input.shortLabel
         }
     }
+
+    fun overlayLabel(): String {
+        val base = when (input) {
+            ControllerInputSource.LEFT_STICK -> "L"
+            ControllerInputSource.RIGHT_STICK -> "R"
+            else -> input.shortLabel
+        }
+        return if (modifierInput != null) {
+            val mod = when (modifierInput) {
+                ControllerInputSource.LEFT_STICK -> "L"
+                ControllerInputSource.RIGHT_STICK -> "R"
+                else -> modifierInput.shortLabel
+            }
+            "$mod+$base"
+        } else {
+            base
+        }
+    }
 }
 
 data class TouchProfile(
@@ -207,6 +226,7 @@ data class DriverConfig(
     val touchOrientationMode: TouchOrientationMode = TouchOrientationMode.AUTO,
     val activeTouchProfileId: String = "fps_default",
     val showTouchHints: Boolean = true,
+    val touchHintsOpacityPercent: Int = 55,
     val buttonMappings: Map<ExtraButtonId, MappingAction> = mapOf(
         ExtraButtonId.M1 to MappingAction.A,
         ExtraButtonId.M2 to MappingAction.B,

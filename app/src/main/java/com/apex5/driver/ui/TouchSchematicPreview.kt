@@ -129,6 +129,7 @@ internal fun TouchBlueprintAndPadCard(
                     verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     LegendDot("轮盘摇杆 / 视角", Apex5Palette.Cyan)
+                    LegendDot("技能指向瞄准", Apex5Palette.Emerald)
                     LegendDot("FPS 视角滑区", Apex5Palette.Violet)
                     LegendDot("连发点击", Apex5Palette.Amber)
                     LegendDot("序列宏 & 路径", Color(0xFFFBBF24))
@@ -285,21 +286,27 @@ private fun TouchProfileSchematicCanvas(
                 val cy = n.yNorm * h
                 val accent = when (n.kind) {
                     TouchNodeKind.JOYSTICK -> Apex5Palette.Cyan
+                    TouchNodeKind.SKILL_AIM -> Apex5Palette.Emerald
                     TouchNodeKind.CAMERA_SWIPE -> Apex5Palette.Violet
                     TouchNodeKind.RAPID_TAP -> Apex5Palette.Amber
                     TouchNodeKind.MACRO -> Color(0xFFFBBF24)
                     TouchNodeKind.TAP -> Apex5Palette.Cyan
                 }
 
-                if (n.kind == TouchNodeKind.JOYSTICK || n.kind == TouchNodeKind.CAMERA_SWIPE) {
+                if (n.kind == TouchNodeKind.JOYSTICK || n.kind == TouchNodeKind.CAMERA_SWIPE || n.kind == TouchNodeKind.SKILL_AIM) {
+                    val zoneR = if (n.kind == TouchNodeKind.SKILL_AIM) {
+                        (n.radiusNorm * 1.45f * minDim).coerceIn(24f, 80f)
+                    } else {
+                        n.radiusNorm * minDim
+                    }
                     drawCircle(
                         color = accent.copy(alpha = 0.08f),
-                        radius = n.radiusNorm * minDim,
+                        radius = zoneR,
                         center = Offset(cx, cy)
                     )
                     drawCircle(
                         color = accent.copy(alpha = 0.5f),
-                        radius = n.radiusNorm * minDim,
+                        radius = zoneR,
                         center = Offset(cx, cy),
                         style = Stroke(
                             width = 2.5f,
@@ -409,14 +416,16 @@ private fun LegendDot(label: String, color: Color) {
 private fun NodeSummaryTag(node: TouchNodeConfig) {
     val accent = when (node.kind) {
         TouchNodeKind.JOYSTICK -> Apex5Palette.Cyan
+        TouchNodeKind.SKILL_AIM -> Apex5Palette.Emerald
         TouchNodeKind.CAMERA_SWIPE -> Apex5Palette.Violet
         TouchNodeKind.RAPID_TAP -> Apex5Palette.Amber
         TouchNodeKind.MACRO -> Color(0xFFFBBF24)
-        TouchNodeKind.TAP -> Apex5Palette.Emerald
+        TouchNodeKind.TAP -> Apex5Palette.Cyan
     }
     val detail = when (node.kind) {
         TouchNodeKind.MACRO -> "${node.macroSteps.size.coerceAtLeast(1)}步宏"
         TouchNodeKind.RAPID_TAP -> "${node.rapidHz}Hz"
+        TouchNodeKind.SKILL_AIM -> "指向 ${(node.radiusNorm * 100).roundToInt()}%"
         else -> "${(node.xNorm * 100).roundToInt()}%,${(node.yNorm * 100).roundToInt()}%"
     }
     Row(

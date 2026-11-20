@@ -86,6 +86,7 @@ object ConfigStore {
             touchOrientationMode = touchOri,
             activeTouchProfileId = p.getString("active_touch_profile", "fps_default") ?: "fps_default",
             showTouchHints = p.getBoolean("show_touch_hints", true),
+            touchHintsOpacityPercent = p.getInt("touch_hints_opacity_pct", 55).coerceIn(0, 100),
             buttonMappings = mappings,
             faceButtonMappings = faceMappings,
             turboEnabledKeys = turboKeys,
@@ -117,6 +118,7 @@ object ConfigStore {
             putString("touch_orientation", cfg.touchOrientationMode.name)
             putString("active_touch_profile", cfg.activeTouchProfileId)
             putBoolean("show_touch_hints", cfg.showTouchHints)
+            putInt("touch_hints_opacity_pct", cfg.touchHintsOpacityPercent.coerceIn(0, 100))
             cfg.buttonMappings.forEach { (k, v) -> putString("map_${k.name}", v.name) }
             cfg.faceButtonMappings.forEach { (k, v) -> putString("fmap_${k.name}", v.name) }
             putString("turbo_keys", cfg.turboEnabledKeys.joinToString(",") { it.name })
