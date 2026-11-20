@@ -239,6 +239,30 @@ object DriverController {
         return created
     }
 
+    fun duplicateTouchProfile(context: Context, profileId: String): TouchProfile? {
+        val cloned = TouchProfileStore.duplicateProfile(context, profileId) ?: return null
+        _touchProfiles.value = TouchProfileStore.loadAll(context)
+        selectTouchProfile(context, cloned.id)
+        appendLog("已复制触屏方案: ${cloned.name}")
+        return cloned
+    }
+
+    fun exportTouchProfileJson(profile: TouchProfile): String {
+        return TouchProfileStore.exportProfileJson(profile)
+    }
+
+    fun importTouchProfileJson(context: Context, jsonText: String): Result<TouchProfile> {
+        val result = TouchProfileStore.importProfileJson(context, jsonText)
+        result.onSuccess { imported ->
+            _touchProfiles.value = TouchProfileStore.loadAll(context)
+            selectTouchProfile(context, imported.id)
+            appendLog("已导入触屏方案: ${imported.name} (${imported.nodes.size} 个节点)")
+        }.onFailure { err ->
+            appendLog("导入触屏方案失败: ${err.message ?: "JSON 格式无效"}")
+        }
+        return result
+    }
+
     fun deleteTouchProfile(context: Context, profileId: String) {
         val next = TouchProfileStore.deleteProfile(context, profileId)
         _touchProfiles.value = next
@@ -251,6 +275,10 @@ object DriverController {
         val next = TouchProfileStore.resetPresets(context)
         _touchProfiles.value = next
         selectTouchProfile(context, next.first().id)
+    }
+
+    fun clearLogs() {
+        _status.update { it.copy(logs = emptyList()) }
     }
 
     fun startDriver(context: Context) {

@@ -45,6 +45,14 @@ class TouchMapperEngine {
         var downFrames = 0
     }
 
+    private class MacroRuntime {
+        var prevPressed = false
+        var active = false
+        var stepIdx = 0
+        var isHolding = true
+        var phaseStartNs = 0L
+    }
+
     private val outBytes = ByteArray(PACKET_SIZE)
     private val outBuf = ByteBuffer.wrap(outBytes).order(ByteOrder.LITTLE_ENDIAN)
 
@@ -55,8 +63,10 @@ class TouchMapperEngine {
 
     private val cameraRuntimes = HashMap<String, CameraSwipeRuntime>()
     private val joystickRuntimes = HashMap<String, JoystickRuntime>()
+    private val macroRuntimes = HashMap<String, MacroRuntime>()
     private val nodeSlotMap = HashMap<String, Int>()
     private val slotOwner = arrayOfNulls<String>(MAX_SLOTS)
+    private val suppressedSingleInputs = HashSet<ControllerInputSource>()
 
     private var lastFrameNs = 0L
     private var lastEmitNs = 0L
@@ -64,8 +74,10 @@ class TouchMapperEngine {
     fun reset() {
         cameraRuntimes.clear()
         joystickRuntimes.clear()
+        macroRuntimes.clear()
         nodeSlotMap.clear()
         slotOwner.fill(null)
+        suppressedSingleInputs.clear()
         prevSlotActive.fill(false)
         prevSlotX.fill(0)
         prevSlotY.fill(0)
@@ -109,6 +121,15 @@ class TouchMapperEngine {
             GyroTriggerMode.ALWAYS_ON -> true
             GyroTriggerMode.HOLD_LT -> raw.lt >= 48
             GyroTriggerMode.HOLD_MAPPING -> gyroHoldPressed || gyroToggleActive
+        }
+
+        // Suppress plain single-key triggers when an active combo trigger uses the same primary input
+        suppressedSingleInputs.clear()
+        for (node in profile.nodes) {
+            val mod = node.modifierInput
+            if (mod != null && isInputPressed(mod, raw) && isInputPressed(node.input, raw)) {
+                suppressedSingleInputs.add(node.input)
+            }
         }
 
         var discreteTransition = false
@@ -166,6 +187,15 @@ class TouchMapperEngine {
         return null
     }
 
+    private fun isNodeTriggered(node: TouchNodeConfig, raw: MutableRawFrame): Boolean {
+        val mod = node.modifierInput
+        if (mod == null) {
+            if (node.input in suppressedSingleInputs) return false
+            return isInputPressed(node.input, raw)
+        }
+        return isInputPressed(mod, raw) && isInputPressed(node.input, raw)
+    }
+
     private fun evaluateNode(
         node: TouchNodeConfig,
         raw: MutableRawFrame,
@@ -177,7 +207,7 @@ class TouchMapperEngine {
     ) {
         when (node.kind) {
             TouchNodeKind.TAP -> {
-                if (isInputPressed(node.input, raw)) {
+                if (isNodeTriggered(node, raw)) {
                     out.active = true
                     out.x = node.xNorm
                     out.y = node.yNorm
@@ -185,7 +215,7 @@ class TouchMapperEngine {
             }
 
             TouchNodeKind.RAPID_TAP -> {
-                if (isInputPressed(node.input, raw)) {
+                if (isNodeTriggered(node, raw)) {
                     val periodNs = (1_000_000_000L / node.rapidHz.coerceIn(3, 30)).coerceAtLeast(30_000_000L)
                     val phase = nowNs % periodNs
                     if (phase < periodNs / 2L) {
@@ -196,7 +226,73 @@ class TouchMapperEngine {
                 }
             }
 
+            TouchNodeKind.MACRO -> {
+                val rt = macroRuntimes.getOrPut(node.id) { MacroRuntime() }
+                val pressed = isNodeTriggered(node, raw)
+                val steps = if (node.macroSteps.isNotEmpty()) {
+                    node.macroSteps
+                } else {
+                    // Default fallback 2-step double-tap at node coordinate
+                    listOf(
+                        com.apex5.driver.model.MacroStep(node.xNorm, node.yNorm, 45, 55),
+                        com.apex5.driver.model.MacroStep(node.xNorm, node.yNorm, 45, 45)
+                    )
+                }
+
+                if (pressed && !rt.prevPressed && !rt.active) {
+                    rt.active = true
+                    rt.stepIdx = 0
+                    rt.isHolding = true
+                    rt.phaseStartNs = nowNs
+                }
+                rt.prevPressed = pressed
+
+                if (!rt.active) return
+
+                if (rt.stepIdx >= steps.size) {
+                    rt.active = false
+                    return
+                }
+
+                val step = steps[rt.stepIdx]
+                val elapsedMs = (nowNs - rt.phaseStartNs) / 1_000_000L
+                if (rt.isHolding) {
+                    if (elapsedMs < step.holdMs) {
+                        out.active = true
+                        out.x = step.xNorm
+                        out.y = step.yNorm
+                    } else {
+                        rt.isHolding = false
+                        rt.phaseStartNs = nowNs
+                        out.active = false
+                    }
+                } else {
+                    if (elapsedMs >= step.delayAfterMs) {
+                        rt.stepIdx++
+                        if (rt.stepIdx >= steps.size) {
+                            rt.active = false
+                        } else {
+                            rt.isHolding = true
+                            rt.phaseStartNs = nowNs
+                            val nextStep = steps[rt.stepIdx]
+                            out.active = true
+                            out.x = nextStep.xNorm
+                            out.y = nextStep.yNorm
+                        }
+                    } else {
+                        out.active = false
+                    }
+                }
+            }
+
             TouchNodeKind.JOYSTICK -> {
+                if (node.modifierInput != null && !isInputPressed(node.modifierInput, raw)) {
+                    joystickRuntimes[node.id]?.let {
+                        it.touching = false
+                        it.downFrames = 0
+                    }
+                    return
+                }
                 val (sx, sy) = readStickNormalized(node.input, raw, config.stickDeadzonePercent)
                 val rt = joystickRuntimes.getOrPut(node.id) { JoystickRuntime() }
                 if (sx == 0f && sy == 0f) {
@@ -217,6 +313,10 @@ class TouchMapperEngine {
             }
 
             TouchNodeKind.CAMERA_SWIPE -> {
+                if (node.modifierInput != null && !isInputPressed(node.modifierInput, raw)) {
+                    cameraRuntimes[node.id]?.touching = false
+                    return
+                }
                 val (sx, sy) = readStickNormalized(node.input, raw, config.stickDeadzonePercent)
                 val rt = cameraRuntimes.getOrPut(node.id) { CameraSwipeRuntime() }
 

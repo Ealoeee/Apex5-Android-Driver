@@ -28,6 +28,7 @@ import android.widget.TextView
 import com.apex5.driver.model.ControllerInputSource
 import com.apex5.driver.model.DriverOutputMode
 import com.apex5.driver.model.LiveControllerState
+import com.apex5.driver.model.MacroStep
 import com.apex5.driver.model.TouchNodeConfig
 import com.apex5.driver.model.TouchNodeKind
 import com.apex5.driver.model.TouchProfile
@@ -362,47 +363,73 @@ class FloatingOverlayService : Service() {
         }
 
         lateinit var canvasView: EditorCanvasView
+        lateinit var inspectorScroll: HorizontalScrollView
         lateinit var inspectorBar: LinearLayout
         lateinit var selectedTitle: TextView
         lateinit var kindBtn: Button
+        lateinit var modBtn: Button
         lateinit var gyroBtn: Button
+        lateinit var addMacroStepBtn: Button
+        lateinit var clearMacroBtn: Button
         lateinit var paramLabel: TextView
         lateinit var paramSeek: SeekBar
         lateinit var addPickerPanel: LinearLayout
         var addListeningInput = false
+        var addComboMacroMode = false
+
+        val modifierCandidates = listOf(
+            null,
+            ControllerInputSource.LT,
+            ControllerInputSource.LB,
+            ControllerInputSource.M1,
+            ControllerInputSource.M2,
+            ControllerInputSource.RB,
+            ControllerInputSource.RT
+        )
 
         fun refreshInspector() {
             val node = workingProfile.nodes.firstOrNull { it.id == selectedNodeId }
             if (node == null) {
-                inspectorBar.visibility = View.GONE
+                inspectorScroll.visibility = View.GONE
                 return
             }
-            inspectorBar.visibility = View.VISIBLE
-            selectedTitle.text = "${node.input.label}"
-            kindBtn.text = "类型: ${node.kind.label}"
+            inspectorScroll.visibility = View.VISIBLE
+            selectedTitle.text = node.displayTriggerLabel()
+            kindBtn.text = "类型: ${node.kind.label.substringBefore(" ")}"
+            modBtn.text = if (node.modifierInput != null) "组合: ${node.modifierInput.shortLabel}+" else "组合: 单键"
             gyroBtn.visibility = if (node.kind == TouchNodeKind.CAMERA_SWIPE) View.VISIBLE else View.GONE
             gyroBtn.text = if (node.gyroAssist) "陀螺仪: 开" else "陀螺仪: 关"
+            val isMacro = node.kind == TouchNodeKind.MACRO
+            addMacroStepBtn.visibility = if (isMacro) View.VISIBLE else View.GONE
+            clearMacroBtn.visibility = if (isMacro && node.macroSteps.isNotEmpty()) View.VISIBLE else View.GONE
 
             when (node.kind) {
                 TouchNodeKind.TAP -> {
-                    paramLabel.text = "显示尺寸: ${(node.radiusNorm * 100).roundToInt()}%"
+                    paramLabel.text = "尺寸 ${(node.radiusNorm * 100).roundToInt()}%"
                     paramSeek.max = 12
                     paramSeek.progress = ((node.radiusNorm * 100f).roundToInt() - 3).coerceIn(0, 12)
                 }
                 TouchNodeKind.RAPID_TAP -> {
-                    paramLabel.text = "连发频率: ${node.rapidHz} 次/秒"
+                    paramLabel.text = "连发 ${node.rapidHz}Hz"
                     paramSeek.max = 22
                     paramSeek.progress = (node.rapidHz - 3).coerceIn(0, 22)
                 }
                 TouchNodeKind.JOYSTICK -> {
-                    paramLabel.text = "轮盘半径: ${(node.radiusNorm * 100).roundToInt()}%"
+                    paramLabel.text = "轮盘 ${(node.radiusNorm * 100).roundToInt()}%"
                     paramSeek.max = 18
                     paramSeek.progress = ((node.radiusNorm * 100f).roundToInt() - 5).coerceIn(0, 18)
                 }
                 TouchNodeKind.CAMERA_SWIPE -> {
-                    paramLabel.text = "视角灵敏度: %.2fx".format(node.sensitivity)
+                    paramLabel.text = "灵敏 %.2fx".format(node.sensitivity)
                     paramSeek.max = 28
                     paramSeek.progress = (((node.sensitivity - 0.3f) / 0.1f).roundToInt()).coerceIn(0, 28)
+                }
+                TouchNodeKind.MACRO -> {
+                    val stepCount = node.macroSteps.size.coerceAtLeast(1)
+                    val intervalMs = node.macroSteps.firstOrNull()?.delayAfterMs ?: 55
+                    paramLabel.text = "宏 ${stepCount}步 · 间隔${intervalMs}ms"
+                    paramSeek.max = 20
+                    paramSeek.progress = ((intervalMs - 20) / 10).coerceIn(0, 20)
                 }
             }
         }
@@ -424,9 +451,9 @@ class FloatingOverlayService : Service() {
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(12f), dp(8f), dp(12f), dp(8f))
             background = GradientDrawable().apply {
-                cornerRadius = dp(12f).toFloat()
-                setColor(Color.parseColor("#E60F172A"))
-                setStroke(dp(1f), Color.parseColor("#334155"))
+                cornerRadius = dp(14f).toFloat()
+                setColor(Color.parseColor("#EB090E1A"))
+                setStroke(dp(1f), Color.parseColor("#38BDF8"))
             }
         }
         val profileTag = TextView(this).apply {
@@ -467,46 +494,74 @@ class FloatingOverlayService : Service() {
             visibility = View.GONE
             setPadding(dp(12f), dp(10f), dp(12f), dp(10f))
             background = GradientDrawable().apply {
-                cornerRadius = dp(12f).toFloat()
-                setColor(Color.parseColor("#F20B1120"))
+                cornerRadius = dp(14f).toFloat()
+                setColor(Color.parseColor("#F5090E1A"))
                 setStroke(dp(1.5f), Color.parseColor("#38BDF8"))
             }
         }
-        val pickerHint = TextView(this).apply {
-            text = "点选要添加的按键，或直接按一下手柄上的实体按键 (如 M1/RT/A)："
-            setTextColor(Color.parseColor("#38BDF8"))
-            textSize = 12f
+        val pickerTopRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
             setPadding(0, 0, 0, dp(8f))
         }
-        addPickerPanel.addView(pickerHint)
+        val pickerHint = TextView(this).apply {
+            text = "点选按键，或直接按手柄实体键添加："
+            setTextColor(Color.parseColor("#38BDF8"))
+            textSize = 12f
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        }
+        lateinit var modeToggleBtn: Button
+        modeToggleBtn = makeMiniBtn("模式: 普通键位", "#1E293B", "#E2E8F0") {
+            addComboMacroMode = !addComboMacroMode
+            modeToggleBtn.text = if (addComboMacroMode) "模式: +组合宏(LT+)" else "模式: 普通键位"
+            modeToggleBtn.setTextColor(Color.parseColor(if (addComboMacroMode) "#F59E0B" else "#E2E8F0"))
+        }
+        pickerTopRow.addView(pickerHint)
+        pickerTopRow.addView(modeToggleBtn)
+        addPickerPanel.addView(pickerTopRow)
 
         fun addInputNode(src: ControllerInputSource) {
             addListeningInput = false
             addPickerPanel.visibility = View.GONE
-            val existing = workingProfile.nodes.firstOrNull { it.input == src }
-            if (existing != null) {
-                selectedNodeId = existing.id
-                canvasView.setProfileNodes(workingProfile.nodes, selectedNodeId)
-                refreshInspector()
-                return
+            if (!addComboMacroMode) {
+                val existing = workingProfile.nodes.firstOrNull { it.input == src && it.modifierInput == null }
+                if (existing != null) {
+                    selectedNodeId = existing.id
+                    canvasView.setProfileNodes(workingProfile.nodes, selectedNodeId)
+                    refreshInspector()
+                    return
+                }
             }
-            val kind = when (src) {
-                ControllerInputSource.LEFT_STICK -> TouchNodeKind.JOYSTICK
-                ControllerInputSource.RIGHT_STICK -> TouchNodeKind.CAMERA_SWIPE
+            val kind = when {
+                addComboMacroMode -> TouchNodeKind.MACRO
+                src == ControllerInputSource.LEFT_STICK -> TouchNodeKind.JOYSTICK
+                src == ControllerInputSource.RIGHT_STICK -> TouchNodeKind.CAMERA_SWIPE
                 else -> TouchNodeKind.TAP
             }
+            val modifier = if (addComboMacroMode) {
+                if (src == ControllerInputSource.LT) ControllerInputSource.LB else ControllerInputSource.LT
+            } else null
             val radius = when (kind) {
                 TouchNodeKind.JOYSTICK -> 0.10f
                 TouchNodeKind.CAMERA_SWIPE -> 0.14f
                 else -> 0.045f
             }
+            val defaultSteps = if (kind == TouchNodeKind.MACRO) {
+                listOf(
+                    MacroStep(0.50f, 0.50f, 45, 55),
+                    MacroStep(0.58f, 0.45f, 45, 55)
+                )
+            } else emptyList()
+
             val node = TouchNodeConfig(
                 id = "n_" + UUID.randomUUID().toString().take(8),
                 input = src,
                 kind = kind,
                 xNorm = 0.5f,
                 yNorm = 0.5f,
-                radiusNorm = radius
+                radiusNorm = radius,
+                modifierInput = modifier,
+                macroSteps = defaultSteps
             )
             workingProfile = workingProfile.copy(nodes = workingProfile.nodes + node)
             selectedNodeId = node.id
@@ -534,13 +589,16 @@ class FloatingOverlayService : Service() {
         root.addView(addPickerPanel, pickerLp)
 
         // Bottom inspector bar
+        inspectorScroll = HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false
+        }
         inspectorBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(12f), dp(8f), dp(12f), dp(8f))
             background = GradientDrawable().apply {
-                cornerRadius = dp(12f).toFloat()
-                setColor(Color.parseColor("#E60F172A"))
+                cornerRadius = dp(14f).toFloat()
+                setColor(Color.parseColor("#EB090E1A"))
                 setStroke(dp(1f), Color.parseColor("#334155"))
             }
         }
@@ -548,7 +606,7 @@ class FloatingOverlayService : Service() {
             setTextColor(Color.WHITE)
             textSize = 12.5f
             typeface = Typeface.DEFAULT_BOLD
-            setPadding(0, 0, dp(10f), 0)
+            setPadding(0, 0, dp(8f), 0)
         }
         kindBtn = makeMiniBtn("类型", "#1E293B", "#38BDF8") {
             val curId = selectedNodeId ?: return@makeMiniBtn
@@ -556,7 +614,27 @@ class FloatingOverlayService : Service() {
                 if (n.id == curId) {
                     val kinds = TouchNodeKind.entries
                     val nextKind = kinds[(kinds.indexOf(n.kind) + 1) % kinds.size]
-                    n.copy(kind = nextKind)
+                    val nextSteps = if (nextKind == TouchNodeKind.MACRO && n.macroSteps.isEmpty()) {
+                        listOf(
+                            MacroStep(n.xNorm, n.yNorm, 45, 55),
+                            MacroStep((n.xNorm + 0.08f).coerceIn(0.05f, 0.95f), (n.yNorm - 0.06f).coerceIn(0.05f, 0.95f), 45, 55)
+                        )
+                    } else n.macroSteps
+                    n.copy(kind = nextKind, macroSteps = nextSteps)
+                } else n
+            }
+            workingProfile = workingProfile.copy(nodes = nextNodes)
+            canvasView.setProfileNodes(workingProfile.nodes, selectedNodeId)
+            refreshInspector()
+        }
+        modBtn = makeMiniBtn("组合: 单键", "#1E293B", "#F59E0B") {
+            val curId = selectedNodeId ?: return@makeMiniBtn
+            val nextNodes = workingProfile.nodes.map { n ->
+                if (n.id == curId) {
+                    val options = modifierCandidates.filter { it == null || it != n.input }
+                    val idx = options.indexOf(n.modifierInput)
+                    val nextMod = options[(idx + 1) % options.size]
+                    n.copy(modifierInput = nextMod)
                 } else n
             }
             workingProfile = workingProfile.copy(nodes = nextNodes)
@@ -572,13 +650,39 @@ class FloatingOverlayService : Service() {
             canvasView.setProfileNodes(workingProfile.nodes, selectedNodeId)
             refreshInspector()
         }
+        addMacroStepBtn = makeMiniBtn("+宏点", "#1E293B", "#34D399") {
+            val curId = selectedNodeId ?: return@makeMiniBtn
+            val nextNodes = workingProfile.nodes.map { n ->
+                if (n.id == curId) {
+                    val baseSteps = n.macroSteps.ifEmpty {
+                        listOf(MacroStep(n.xNorm, n.yNorm, 45, 55))
+                    }
+                    val last = baseSteps.last()
+                    val nextX = (last.xNorm + 0.07f).let { if (it > 0.94f) (last.xNorm - 0.08f).coerceAtLeast(0.06f) else it }
+                    val nextY = (last.yNorm - 0.05f).let { if (it < 0.06f) (last.yNorm + 0.08f).coerceAtMost(0.94f) else it }
+                    n.copy(macroSteps = baseSteps + MacroStep(nextX, nextY, last.holdMs, last.delayAfterMs))
+                } else n
+            }
+            workingProfile = workingProfile.copy(nodes = nextNodes)
+            canvasView.setProfileNodes(workingProfile.nodes, selectedNodeId)
+            refreshInspector()
+        }
+        clearMacroBtn = makeMiniBtn("重置宏", "#1E293B", "#FCA5A5") {
+            val curId = selectedNodeId ?: return@makeMiniBtn
+            val nextNodes = workingProfile.nodes.map { n ->
+                if (n.id == curId) n.copy(macroSteps = emptyList()) else n
+            }
+            workingProfile = workingProfile.copy(nodes = nextNodes)
+            canvasView.setProfileNodes(workingProfile.nodes, selectedNodeId)
+            refreshInspector()
+        }
         paramLabel = TextView(this).apply {
             setTextColor(Color.parseColor("#CBD5E1"))
             textSize = 11.5f
             setPadding(dp(8f), 0, dp(6f), 0)
         }
         paramSeek = SeekBar(this).apply {
-            layoutParams = LinearLayout.LayoutParams(dp(130f), ViewGroup.LayoutParams.WRAP_CONTENT)
+            layoutParams = LinearLayout.LayoutParams(dp(120f), ViewGroup.LayoutParams.WRAP_CONTENT)
             setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
                 override fun onProgressChanged(sb: SeekBar?, progress: Int, fromUser: Boolean) {
                     if (!fromUser) return
@@ -590,6 +694,18 @@ class FloatingOverlayService : Service() {
                                 TouchNodeKind.RAPID_TAP -> n.copy(rapidHz = (progress + 3).coerceIn(3, 25))
                                 TouchNodeKind.JOYSTICK -> n.copy(radiusNorm = (progress + 5) / 100f)
                                 TouchNodeKind.CAMERA_SWIPE -> n.copy(sensitivity = (0.3f + progress * 0.1f).coerceIn(0.3f, 3.1f))
+                                TouchNodeKind.MACRO -> {
+                                    val newDelay = (20 + progress * 10).coerceIn(20, 220)
+                                    val steps = if (n.macroSteps.isEmpty()) {
+                                        listOf(
+                                            MacroStep(n.xNorm, n.yNorm, 45, newDelay),
+                                            MacroStep(n.xNorm, n.yNorm, 45, newDelay)
+                                        )
+                                    } else {
+                                        n.macroSteps.map { it.copy(delayAfterMs = newDelay) }
+                                    }
+                                    n.copy(macroSteps = steps)
+                                }
                             }
                         } else n
                     }
@@ -613,18 +729,28 @@ class FloatingOverlayService : Service() {
         inspectorBar.addView(selectedTitle)
         inspectorBar.addView(kindBtn)
         addHorizontalGap(inspectorBar, 6f)
+        inspectorBar.addView(modBtn)
+        addHorizontalGap(inspectorBar, 6f)
         inspectorBar.addView(gyroBtn)
+        inspectorBar.addView(addMacroStepBtn)
+        addHorizontalGap(inspectorBar, 6f)
+        inspectorBar.addView(clearMacroBtn)
         inspectorBar.addView(paramLabel)
         inspectorBar.addView(paramSeek)
         addHorizontalGap(inspectorBar, 6f)
         inspectorBar.addView(deleteBtn)
+        inspectorScroll.addView(inspectorBar)
 
         val botLp = FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.WRAP_CONTENT,
             ViewGroup.LayoutParams.WRAP_CONTENT,
             Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
-        ).apply { bottomMargin = dp(14f) }
-        root.addView(inspectorBar, botLp)
+        ).apply {
+            bottomMargin = dp(14f)
+            marginStart = dp(12f)
+            marginEnd = dp(12f)
+        }
+        root.addView(inspectorScroll, botLp)
         refreshInspector()
 
         // Listen for physical controller press while addPickerPanel is open
@@ -759,10 +885,15 @@ class FloatingOverlayService : Service() {
             strokeWidth = 3f
             color = Color.parseColor("#6638BDF8")
         }
+        private val macroRingPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = 3f
+            color = Color.parseColor("#88F59E0B")
+        }
         private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.parseColor("#AAFFFFFF")
+            color = Color.parseColor("#BBFFFFFF")
             textAlign = Paint.Align.CENTER
-            textSize = 30f
+            textSize = 28f
             typeface = Typeface.DEFAULT_BOLD
         }
 
@@ -781,8 +912,10 @@ class FloatingOverlayService : Service() {
                 val cy = n.yNorm * h
                 val r = (n.radiusNorm * minDim).coerceAtLeast(36f)
                 canvas.drawCircle(cx, cy, r, fillPaint)
-                canvas.drawCircle(cx, cy, r, ringPaint)
-                canvas.drawText(n.input.shortLabel, cx, cy + 10f, textPaint)
+                canvas.drawCircle(cx, cy, r, if (n.kind == TouchNodeKind.MACRO) macroRingPaint else ringPaint)
+                val label = n.displayTriggerLabel()
+                textPaint.textSize = if (label.length > 4) 21f else 28f
+                canvas.drawText(label, cx, cy + 8f, textPaint)
             }
         }
     }
@@ -794,6 +927,7 @@ class FloatingOverlayService : Service() {
         private var nodes: List<TouchNodeConfig> = emptyList()
         private var selectedId: String? = null
         private var draggingId: String? = null
+        private var draggingMacroStepIdx: Int? = null
         private var dragOffsetX = 0f
         private var dragOffsetY = 0f
 
@@ -802,6 +936,21 @@ class FloatingOverlayService : Service() {
             strokeWidth = 3f
             pathEffect = DashPathEffect(floatArrayOf(14f, 10f), 0f)
             color = Color.parseColor("#8838BDF8")
+        }
+        private val macroLinePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = 3.5f
+            pathEffect = DashPathEffect(floatArrayOf(10f, 8f), 0f)
+            color = Color.parseColor("#CCF59E0B")
+        }
+        private val macroStepFill = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.FILL
+            color = Color.parseColor("#D978350F")
+        }
+        private val macroStepStroke = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = 3f
+            color = Color.parseColor("#FBBF24")
         }
         private val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.FILL
@@ -813,13 +962,13 @@ class FloatingOverlayService : Service() {
         private val labelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = Color.WHITE
             textAlign = Paint.Align.CENTER
-            textSize = 34f
+            textSize = 32f
             typeface = Typeface.DEFAULT_BOLD
         }
         private val subPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = Color.parseColor("#CBD5E1")
             textAlign = Paint.Align.CENTER
-            textSize = 22f
+            textSize = 21f
         }
 
         fun setProfileNodes(list: List<TouchNodeConfig>, selected: String?) {
@@ -849,8 +998,25 @@ class FloatingOverlayService : Service() {
                     canvas.drawCircle(cx, cy, zoneR, zonePaint)
                 }
 
+                // Draw macro step waypoints & dashed connector when MACRO node is selected or visible
+                if (n.kind == TouchNodeKind.MACRO && n.macroSteps.isNotEmpty() && isSelected) {
+                    var prevX = cx
+                    var prevY = cy
+                    n.macroSteps.forEachIndexed { idx, step ->
+                        val sx = step.xNorm * w
+                        val sy = step.yNorm * h
+                        canvas.drawLine(prevX, prevY, sx, sy, macroLinePaint)
+                        canvas.drawCircle(sx, sy, 32f, macroStepFill)
+                        canvas.drawCircle(sx, sy, 32f, macroStepStroke)
+                        labelPaint.textSize = 24f
+                        canvas.drawText("${idx + 1}", sx, sy + 8f, labelPaint)
+                        prevX = sx
+                        prevY = sy
+                    }
+                }
+
                 val handleR = when (n.kind) {
-                    TouchNodeKind.TAP, TouchNodeKind.RAPID_TAP -> zoneR.coerceIn(42f, 88f)
+                    TouchNodeKind.TAP, TouchNodeKind.RAPID_TAP, TouchNodeKind.MACRO -> zoneR.coerceIn(44f, 88f)
                     else -> 54f
                 }
 
@@ -859,19 +1025,24 @@ class FloatingOverlayService : Service() {
                     isSelected -> Color.parseColor("#22C55E")
                     n.kind == TouchNodeKind.CAMERA_SWIPE -> Color.parseColor("#A855F7")
                     n.kind == TouchNodeKind.RAPID_TAP -> Color.parseColor("#F59E0B")
+                    n.kind == TouchNodeKind.MACRO -> Color.parseColor("#FBBF24")
                     else -> Color.parseColor("#38BDF8")
                 }
 
                 canvas.drawCircle(cx, cy, handleR, fillPaint)
                 canvas.drawCircle(cx, cy, handleR, borderPaint)
-                canvas.drawText(n.input.shortLabel, cx, cy + 8f, labelPaint)
+
+                val trigLabel = n.displayTriggerLabel()
+                labelPaint.textSize = if (trigLabel.length > 4) 24f else 32f
+                canvas.drawText(trigLabel, cx, cy + 6f, labelPaint)
                 val kindTag = when (n.kind) {
                     TouchNodeKind.TAP -> "点击"
                     TouchNodeKind.RAPID_TAP -> "${n.rapidHz}Hz"
                     TouchNodeKind.JOYSTICK -> "摇杆"
                     TouchNodeKind.CAMERA_SWIPE -> "视角"
+                    TouchNodeKind.MACRO -> "宏${n.macroSteps.size.coerceAtLeast(1)}步"
                 }
-                canvas.drawText(kindTag, cx, cy + 32f, subPaint)
+                canvas.drawText(kindTag, cx, cy + 30f, subPaint)
             }
         }
 
@@ -884,14 +1055,39 @@ class FloatingOverlayService : Service() {
                 MotionEvent.ACTION_DOWN -> {
                     val tx = event.x
                     val ty = event.y
+
+                    // First check if user tapped a step waypoint on the currently selected MACRO node
+                    val selNode = nodes.firstOrNull { it.id == selectedId }
+                    if (selNode != null && selNode.kind == TouchNodeKind.MACRO && selNode.macroSteps.isNotEmpty()) {
+                        for (idx in selNode.macroSteps.indices.reversed()) {
+                            val st = selNode.macroSteps[idx]
+                            val sx = st.xNorm * w
+                            val sy = st.yNorm * h
+                            if (hypot((tx - sx).toDouble(), (ty - sy).toDouble()) <= 44f) {
+                                draggingId = selNode.id
+                                draggingMacroStepIdx = idx
+                                dragOffsetX = tx - sx
+                                dragOffsetY = ty - sy
+                                invalidate()
+                                return true
+                            }
+                        }
+                    }
+
                     val hit = nodes.lastOrNull { n ->
                         val cx = n.xNorm * w
                         val cy = n.yNorm * h
-                        val hitR = maxOf(68f, if (n.kind == TouchNodeKind.TAP || n.kind == TouchNodeKind.RAPID_TAP) n.radiusNorm * minDim else 68f)
+                        val hitR = maxOf(
+                            68f,
+                            if (n.kind == TouchNodeKind.TAP || n.kind == TouchNodeKind.RAPID_TAP || n.kind == TouchNodeKind.MACRO) {
+                                n.radiusNorm * minDim
+                            } else 68f
+                        )
                         hypot((tx - cx).toDouble(), (ty - cy).toDouble()) <= hitR
                     }
                     if (hit != null) {
                         draggingId = hit.id
+                        draggingMacroStepIdx = null
                         selectedId = hit.id
                         dragOffsetX = tx - hit.xNorm * w
                         dragOffsetY = ty - hit.yNorm * h
@@ -904,13 +1100,25 @@ class FloatingOverlayService : Service() {
                     val id = draggingId ?: return false
                     val nx = ((event.x - dragOffsetX) / w).coerceIn(0.02f, 0.98f)
                     val ny = ((event.y - dragOffsetY) / h).coerceIn(0.02f, 0.98f)
-                    nodes = nodes.map { n -> if (n.id == id) n.copy(xNorm = nx, yNorm = ny) else n }
+                    val stepIdx = draggingMacroStepIdx
+                    nodes = nodes.map { n ->
+                        if (n.id == id) {
+                            if (stepIdx != null && stepIdx in n.macroSteps.indices) {
+                                val nextSteps = n.macroSteps.toMutableList()
+                                nextSteps[stepIdx] = nextSteps[stepIdx].copy(xNorm = nx, yNorm = ny)
+                                n.copy(macroSteps = nextSteps)
+                            } else {
+                                n.copy(xNorm = nx, yNorm = ny)
+                            }
+                        } else n
+                    }
                     onNodesChanged(nodes, selectedId)
                     invalidate()
                     return true
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                     draggingId = null
+                    draggingMacroStepIdx = null
                     return true
                 }
             }

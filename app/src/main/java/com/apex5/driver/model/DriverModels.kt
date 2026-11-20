@@ -96,8 +96,16 @@ enum class TouchNodeKind(val label: String) {
     TAP("点击 / 长按"),
     RAPID_TAP("连发点击"),
     JOYSTICK("轮盘摇杆 / 技能拖拽"),
-    CAMERA_SWIPE("FPS 视角滑动 (无限转向 + 陀螺仪)")
+    CAMERA_SWIPE("FPS 视角滑动 (无限转向 + 陀螺仪)"),
+    MACRO("序列宏 (多步连点)")
 }
+
+data class MacroStep(
+    val xNorm: Float,
+    val yNorm: Float,
+    val holdMs: Int = 45,
+    val delayAfterMs: Int = 55
+)
 
 data class TouchNodeConfig(
     val id: String,
@@ -108,8 +116,18 @@ data class TouchNodeConfig(
     val radiusNorm: Float = 0.09f,
     val sensitivity: Float = 1.0f,
     val rapidHz: Int = 12,
-    val gyroAssist: Boolean = true
-)
+    val gyroAssist: Boolean = true,
+    val modifierInput: ControllerInputSource? = null,
+    val macroSteps: List<MacroStep> = emptyList()
+) {
+    fun displayTriggerLabel(): String {
+        return if (modifierInput != null) {
+            "${modifierInput.shortLabel}+${input.shortLabel}"
+        } else {
+            input.shortLabel
+        }
+    }
+}
 
 data class TouchProfile(
     val id: String,

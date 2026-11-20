@@ -3,6 +3,7 @@ package com.apex5.driver
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Color as AndroidColor
 import android.hardware.usb.UsbManager
 import android.os.Build
 import android.os.Bundle
@@ -10,16 +11,35 @@ import android.view.InputDevice
 import android.view.KeyEvent
 import android.view.MotionEvent
 import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.graphics.Color
 import androidx.core.content.ContextCompat
 import com.apex5.driver.service.DriverController
 import com.apex5.driver.shizuku.ShizukuBridge
 import com.apex5.driver.ui.Apex5Dashboard
+
+private val Apex5ColorScheme = darkColorScheme(
+    primary = Color(0xFF38BDF8),
+    onPrimary = Color(0xFF062033),
+    secondary = Color(0xFFA855F7),
+    onSecondary = Color(0xFF1F0936),
+    background = Color(0xFF070B14),
+    onBackground = Color(0xFFF1F5F9),
+    surface = Color(0xFF0F172A),
+    onSurface = Color(0xFFF1F5F9),
+    surfaceVariant = Color(0xFF162036),
+    onSurfaceVariant = Color(0xFF94A3B8),
+    outline = Color(0xFF23324D),
+    error = Color(0xFFEF4444),
+    onError = Color.White
+)
 
 class MainActivity : ComponentActivity() {
     private val notifPermLauncher = registerForActivityResult(
@@ -27,6 +47,10 @@ class MainActivity : ComponentActivity() {
     ) { }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        enableEdgeToEdge(
+            statusBarStyle = SystemBarStyle.dark(AndroidColor.TRANSPARENT),
+            navigationBarStyle = SystemBarStyle.dark(AndroidColor.TRANSPARENT)
+        )
         super.onCreate(savedInstanceState)
         DriverController.init(this)
         requestNotificationPermissionIfNeeded()
@@ -37,7 +61,7 @@ class MainActivity : ComponentActivity() {
             val config by DriverController.config.collectAsState()
             val touchProfiles by DriverController.touchProfiles.collectAsState()
 
-            MaterialTheme(colorScheme = darkColorScheme()) {
+            MaterialTheme(colorScheme = Apex5ColorScheme) {
                 Apex5Dashboard(
                     status = status,
                     config = config,
@@ -53,11 +77,15 @@ class MainActivity : ComponentActivity() {
                     onRequestOverlayPermission = { DriverController.requestOverlayPermission(this) },
                     onSelectTouchProfile = { id -> DriverController.selectTouchProfile(this, id) },
                     onCreateTouchProfile = { name -> DriverController.createTouchProfile(this, name) },
+                    onDuplicateTouchProfile = { id -> DriverController.duplicateTouchProfile(this, id) },
+                    onExportTouchProfile = { profile -> DriverController.exportTouchProfileJson(profile) },
+                    onImportTouchProfile = { json -> DriverController.importTouchProfileJson(this, json) },
                     onDeleteTouchProfile = { id -> DriverController.deleteTouchProfile(this, id) },
                     onResetTouchPresets = { DriverController.resetTouchPresets(this) },
                     onProbePermissions = {
                         Thread { DriverController.probeShizukuPermissions() }.start()
                     },
+                    onClearLogs = { DriverController.clearLogs() },
                     onTestRumble = { DriverController.triggerTestRumble() },
                     onUpdateConfig = { transform -> DriverController.updateConfig(this, transform) }
                 )

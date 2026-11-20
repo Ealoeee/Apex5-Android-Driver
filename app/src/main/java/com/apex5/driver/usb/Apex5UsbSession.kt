@@ -192,8 +192,9 @@ class Apex5UsbSession(
             }
         }
 
-        xinputInEp?.let { allocateInRequests(it, Tag.XINPUT_IN, 4) }
-        hidInEp?.let { allocateInRequests(it, Tag.HID_IN, 4) }
+        val xinputQueueDepth = if (hidInEp != null) 2 else 4
+        xinputInEp?.let { allocateInRequests(it, Tag.XINPUT_IN, xinputQueueDepth) }
+        hidInEp?.let { allocateInRequests(it, Tag.HID_IN, 8) }
 
         val outPool = mutableMapOf<Int, MutableList<RequestSlot>>()
         fun sendOutNow(ep: UsbEndpoint, payload: ByteArray) {
