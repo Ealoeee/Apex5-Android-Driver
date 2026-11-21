@@ -177,15 +177,17 @@ object ConfigStore {
                     deadzoneStartPercent = 2,
                     deadzoneEndPercent = 10,
                     hairTriggerMode = false,
-                    hapticMode = TriggerHapticMode.SYNC_MAIN,
-                    hapticStrengthPercent = 65
+                    hapticMode = TriggerHapticMode.SNIPER_CLICK,
+                    hapticStrengthPercent = 65,
+                    startTravelPercent = 30
                 ),
                 rightTrigger = TriggerTuningConfig(
                     deadzoneStartPercent = 2,
                     deadzoneEndPercent = 0,
                     hairTriggerMode = true,
-                    hapticMode = TriggerHapticMode.SNIPER_CLICK,
-                    hapticStrengthPercent = 85
+                    hapticMode = TriggerHapticMode.TRIGGER_LOCK,
+                    hapticStrengthPercent = 100,
+                    startTravelPercent = 18
                 ),
                 gyroTriggerMode = GyroTriggerMode.HOLD_LT,
                 gyroSensitivityX = 2.0f,
@@ -359,6 +361,8 @@ object ConfigStore {
         put("hairTriggerMode", t.hairTriggerMode)
         put("hapticMode", t.hapticMode.name)
         put("hapticStrengthPercent", t.hapticStrengthPercent)
+        put("startTravelPercent", t.startTravelPercent)
+        put("frequencyPercent", t.frequencyPercent)
     }
 
     private fun parseTriggerJson(json: String): TriggerTuningConfig = runCatching {
@@ -369,7 +373,9 @@ object ConfigStore {
             hairTriggerMode = o.optBoolean("hairTriggerMode", false),
             hapticMode = runCatching { TriggerHapticMode.valueOf(o.optString("hapticMode")) }
                 .getOrDefault(TriggerHapticMode.OFF),
-            hapticStrengthPercent = o.optInt("hapticStrengthPercent", 75).coerceIn(10, 100)
+            hapticStrengthPercent = o.optInt("hapticStrengthPercent", 75).coerceIn(10, 100),
+            startTravelPercent = o.optInt("startTravelPercent", 25).coerceIn(0, 100),
+            frequencyPercent = o.optInt("frequencyPercent", 45).coerceIn(5, 100)
         )
     }.getOrDefault(TriggerTuningConfig())
 

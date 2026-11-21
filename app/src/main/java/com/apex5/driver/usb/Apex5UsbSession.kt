@@ -31,6 +31,7 @@ class Apex5UsbSession(
     private val onTouchOut: (ByteArray) -> Unit,
     private val onLiveState: (LiveControllerState) -> Unit,
     private val onMetadata: (enhancedActive: Boolean, fw: String, battery: String) -> Unit,
+    private val onTriggerCapabilities: (forceTriggerSupported: Boolean, onboardSummary: String) -> Unit = { _, _ -> },
     private val onLog: (String) -> Unit,
     private val onDisconnected: (String) -> Unit
 ) {
@@ -40,6 +41,15 @@ class Apex5UsbSession(
         val tag: Tag,
         val request: UsbRequest,
         val buffer: ByteBuffer
+    )
+
+    private data class AppliedTriggerKey(
+        val mode: TriggerHapticMode,
+        val strength: Int,
+        val startTravel: Int,
+        val freq: Int,
+        val globalScale: Int,
+        val onboardSeq: Int
     )
 
     private val running = AtomicBoolean(false)
@@ -60,9 +70,21 @@ class Apex5UsbSession(
 
     @Volatile
     private var enhancedStreamActive = false
+    @Volatile
+    private var detectedDeviceId = -1
     private var lastEfMillis = 0L
     private var firmwareText = "--"
     private var batteryText = "--"
+
+    @Volatile
+    private var onboardLeftBlock: ByteArray? = null
+    @Volatile
+    private var onboardRightBlock: ByteArray? = null
+    @Volatile
+    private var onboardSummaryText = "未读取板载配置"
+    private val onboardReadSeq = java.util.concurrent.atomic.AtomicInteger(0)
+    private val pendingOnboardRead = AtomicBoolean(false)
+    private val forceTriggerReapply = AtomicBoolean(false)
 
     @Volatile
     private var currentGripLow = 0
@@ -72,6 +94,11 @@ class Apex5UsbSession(
     private var currentTrigL = 0
     @Volatile
     private var currentTrigR = 0
+
+    private fun isForceTriggerSupported(): Boolean {
+        return detectedDeviceId in Apex5Protocol.APEX5_DEVICE_IDS ||
+            (detectedDeviceId < 0 && device.productId == Apex5Protocol.APEX5_PID)
+    }
 
     fun start(): Boolean {
         val conn = usbManager.openDevice(device)
@@ -142,6 +169,55 @@ class Apex5UsbSession(
         return true
     }
 
+    fun requestSyncOnboardTriggers() {
+        if (!running.get() || hidOutEp == null) return
+        pendingOnboardRead.set(true)
+        forceTriggerReapply.set(true)
+    }
+
+    fun triggerForceTriggerPulse(strength: Int = 225) {
+        if (!running.get()) return
+        val hidOut = hidOutEp
+        if (hidOut != null && isForceTriggerSupported()) {
+            val kick = strength.coerceIn(80, 255)
+            queueHidCommands(
+                hidOut,
+                Apex5Protocol.buildForceTriggerMachineGunCmd(
+                    side = Apex5Protocol.TRIGGER_SIDE_LEFT,
+                    stroke = 0,
+                    pressure = 95,
+                    strength = kick,
+                    frequency = 24,
+                    matchStroke = false
+                ),
+                Apex5Protocol.buildForceTriggerMachineGunCmd(
+                    side = Apex5Protocol.TRIGGER_SIDE_RIGHT,
+                    stroke = 0,
+                    pressure = 95,
+                    strength = kick,
+                    frequency = 24,
+                    matchStroke = false
+                ),
+                Apex5Protocol.buildRumbleV2Cmd(90, 120, 0, 0)
+            )
+            Thread {
+                Thread.sleep(280)
+                if (running.get()) {
+                    hidOutEp?.let { ep ->
+                        pendingOutQueue.offer(ep to Apex5Protocol.buildRumbleV2Cmd(currentGripLow, currentGripHigh, 0, 0))
+                    }
+                    forceTriggerReapply.set(true)
+                }
+            }.start()
+        } else {
+            Thread {
+                sendRumble(0, 0, forceTriggerL = strength, forceTriggerR = strength)
+                Thread.sleep(240)
+                sendRumble(0, 0, forceTriggerL = 0, forceTriggerR = 0)
+            }.start()
+        }
+    }
+
     fun sendRumble(low: Int, high: Int, forceTriggerL: Int? = null, forceTriggerR: Int? = null) {
         if (!running.get()) return
         val cfg = configProvider()
@@ -151,13 +227,22 @@ class Apex5UsbSession(
         currentGripLow = sLow
         currentGripHigh = sHigh
 
+        val forceTrigHw = isForceTriggerSupported()
         val trigScale = cfg.triggerRumbleIntensityPercent.coerceIn(0, 100) / 100f
-        val trigL = forceTriggerL ?: if (cfg.leftTrigger.hapticMode == TriggerHapticMode.SYNC_MAIN) {
-            (sLow * (cfg.leftTrigger.hapticStrengthPercent / 100f) * trigScale).toInt().coerceIn(0, 255)
-        } else currentTrigL
-        val trigR = forceTriggerR ?: if (cfg.rightTrigger.hapticMode == TriggerHapticMode.SYNC_MAIN) {
-            (sHigh * (cfg.rightTrigger.hapticStrengthPercent / 100f) * trigScale).toInt().coerceIn(0, 255)
-        } else currentTrigR
+        val trigL = if (forceTrigHw) {
+            0
+        } else {
+            forceTriggerL ?: if (cfg.leftTrigger.hapticMode == TriggerHapticMode.SYNC_MAIN) {
+                (sLow * (cfg.leftTrigger.hapticStrengthPercent / 100f) * trigScale).toInt().coerceIn(0, 255)
+            } else currentTrigL
+        }
+        val trigR = if (forceTrigHw) {
+            0
+        } else {
+            forceTriggerR ?: if (cfg.rightTrigger.hapticMode == TriggerHapticMode.SYNC_MAIN) {
+                (sHigh * (cfg.rightTrigger.hapticStrengthPercent / 100f) * trigScale).toInt().coerceIn(0, 255)
+            } else currentTrigR
+        }
 
         currentTrigL = trigL
         currentTrigR = trigR
@@ -245,6 +330,8 @@ class Apex5UsbSession(
         }
 
         var handshakeSent = false
+        var handshakeSentMs = 0L
+        var initialOnboardRequested = false
         var lastHeartbeat = 0L
         var lastReacquire = 0L
         var lastRateTick = SystemClock.elapsedRealtime()
@@ -264,6 +351,105 @@ class Apex5UsbSession(
         var ltPulseUntilMs = 0L
         var rtPulseUntilMs = 0L
 
+        var lastLeftForceKey: AppliedTriggerKey? = null
+        var lastRightForceKey: AppliedTriggerKey? = null
+
+        var activeOnboardSlot = 0
+        var onboardTotalChunks = 0
+        var onboardBlob: ByteArray? = null
+        var onboardChunkSeen: BooleanArray? = null
+        var onboardAppliedThisCycle = false
+        var onboardReadStartMs = 0L
+
+        fun finalizeOnboardBlob(nowMs: Long) {
+            val blob = onboardBlob ?: return
+            val seen = onboardChunkSeen ?: return
+            if (onboardAppliedThisCycle || blob.size < Apex5Protocol.ONBOARD_MIN_REQUIRED_BYTES) return
+            val allDone = seen.all { it }
+            val minNeededChunks = (Apex5Protocol.ONBOARD_MIN_REQUIRED_BYTES + 19) / 20
+            val trigDone = seen.size >= minNeededChunks && (0 until minNeededChunks).all { seen[it] }
+            if (!allDone && !(trigDone && nowMs - onboardReadStartMs >= 260L)) return
+
+            onboardAppliedThisCycle = true
+            val leftBlock = blob.sliceArray(
+                Apex5Protocol.ONBOARD_LEFT_TRIGGER_OFFSET until (Apex5Protocol.ONBOARD_LEFT_TRIGGER_OFFSET + 20)
+            )
+            val rightBlock = blob.sliceArray(
+                Apex5Protocol.ONBOARD_RIGHT_TRIGGER_OFFSET until (Apex5Protocol.ONBOARD_RIGHT_TRIGGER_OFFSET + 20)
+            )
+            onboardLeftBlock = leftBlock
+            onboardRightBlock = rightBlock
+            val summary = "槽位#${activeOnboardSlot + 1}: 左=${Apex5Protocol.describeStoredTriggerBlock(leftBlock)} · 右=${Apex5Protocol.describeStoredTriggerBlock(rightBlock)}"
+            onboardSummaryText = summary
+            onLog("已读取 PC 板载扳机预设 ($summary)")
+            onTriggerCapabilities(isForceTriggerSupported(), summary)
+            onboardReadSeq.incrementAndGet()
+        }
+
+        fun updateApex5ForceTriggers(cfg: DriverConfig, nowMs: Long) {
+            val hidOut = hidOutEp ?: return
+            if (!handshakeSent || !isForceTriggerSupported()) return
+            if (detectedDeviceId < 0 && nowMs - handshakeSentMs < 450L) return
+
+            if (forceTriggerReapply.compareAndSet(true, false)) {
+                lastLeftForceKey = null
+                lastRightForceKey = null
+            }
+
+            val seq = onboardReadSeq.get()
+            val gScale = cfg.triggerRumbleIntensityPercent.coerceIn(0, 100)
+
+            val lCfg = cfg.leftTrigger
+            val nextL = AppliedTriggerKey(
+                mode = lCfg.hapticMode,
+                strength = lCfg.hapticStrengthPercent,
+                startTravel = lCfg.startTravelPercent,
+                freq = lCfg.frequencyPercent,
+                globalScale = gScale,
+                onboardSeq = seq
+            )
+            if (nextL != lastLeftForceKey) {
+                val prevMode = lastLeftForceKey?.mode
+                lastLeftForceKey = nextL
+                pendingOutQueue.offer(
+                    hidOut to Apex5Protocol.buildForceTriggerCmdForConfig(
+                        side = Apex5Protocol.TRIGGER_SIDE_LEFT,
+                        cfg = lCfg,
+                        globalTriggerPercent = gScale,
+                        onboardBlock20 = onboardLeftBlock
+                    )
+                )
+                if (prevMode != lCfg.hapticMode || (lCfg.hapticMode == TriggerHapticMode.FOLLOW_ONBOARD && seq > 0)) {
+                    onLog("左扳机伺服 (0x51/0x52) -> ${lCfg.hapticMode.shortLabel}")
+                }
+            }
+
+            val rCfg = cfg.rightTrigger
+            val nextR = AppliedTriggerKey(
+                mode = rCfg.hapticMode,
+                strength = rCfg.hapticStrengthPercent,
+                startTravel = rCfg.startTravelPercent,
+                freq = rCfg.frequencyPercent,
+                globalScale = gScale,
+                onboardSeq = seq
+            )
+            if (nextR != lastRightForceKey) {
+                val prevMode = lastRightForceKey?.mode
+                lastRightForceKey = nextR
+                pendingOutQueue.offer(
+                    hidOut to Apex5Protocol.buildForceTriggerCmdForConfig(
+                        side = Apex5Protocol.TRIGGER_SIDE_RIGHT,
+                        cfg = rCfg,
+                        globalTriggerPercent = gScale,
+                        onboardBlock20 = onboardRightBlock
+                    )
+                )
+                if (prevMode != rCfg.hapticMode || (rCfg.hapticMode == TriggerHapticMode.FOLLOW_ONBOARD && seq > 0)) {
+                    onLog("右扳机伺服 (0x51/0x52) -> ${rCfg.hapticMode.shortLabel}")
+                }
+            }
+        }
+
         fun computeTriggerMotor(
             rawVal: Int,
             tCfg: TriggerTuningConfig,
@@ -273,7 +459,7 @@ class Apex5UsbSession(
         ): Int {
             val strength = (tCfg.hapticStrengthPercent.coerceIn(0, 100) / 100f) * globalScale
             return when (tCfg.hapticMode) {
-                TriggerHapticMode.OFF -> 0
+                TriggerHapticMode.OFF, TriggerHapticMode.FOLLOW_ONBOARD, TriggerHapticMode.TRIGGER_LOCK -> 0
                 TriggerHapticMode.SYNC_MAIN -> {
                     val base = if (isLeft) currentGripLow else currentGripHigh
                     (base * strength).toInt().coerceIn(0, 255)
@@ -307,6 +493,7 @@ class Apex5UsbSession(
         }
 
         fun updateTriggerHaptics(cfg: DriverConfig, nowMs: Long) {
+            if (isForceTriggerSupported()) return
             if (!enhancedStreamActive || hidOutEp == null) return
             if (nowMs - lastTrigHapticCheck < 22L) return
             lastTrigHapticCheck = nowMs
@@ -370,6 +557,7 @@ class Apex5UsbSession(
             if (wantEnhanced && hidOutEp != null) {
                 if (!handshakeSent) {
                     handshakeSent = true
+                    handshakeSentMs = now
                     lastHeartbeat = now
                     onLog("发送 Flydigi V2 增强握手 (CheckArch / GetInfo / GetStatus / SetStatus / Acquire)")
                     queueHidCommands(
@@ -399,6 +587,23 @@ class Apex5UsbSession(
             } else if (!wantEnhanced && enhancedStreamActive) {
                 enhancedStreamActive = false
                 onMetadata(false, firmwareText, batteryText)
+            }
+
+            if (hidOutEp != null && isForceTriggerSupported()) {
+                if (!initialOnboardRequested && handshakeSent && (detectedDeviceId >= 0 || now - handshakeSentMs > 900L)) {
+                    initialOnboardRequested = true
+                    pendingOnboardRead.set(true)
+                }
+                if (pendingOnboardRead.compareAndSet(true, false)) {
+                    onboardTotalChunks = 0
+                    onboardBlob = null
+                    onboardChunkSeen = null
+                    onboardAppliedThisCycle = false
+                    onboardReadStartMs = now
+                    pendingOutQueue.offer(hidOutEp!! to Apex5Protocol.buildMapStatusCmd())
+                }
+                finalizeOnboardBlob(now)
+                updateApex5ForceTriggers(cfg, now)
             }
 
             // Flush outgoing requests (rumble & commands)
@@ -469,10 +674,17 @@ class Apex5UsbSession(
 
                                 Apex5Protocol.CMD_GET_INFO -> {
                                     Apex5Protocol.parseV2InfoReply(tmp, copyLen)?.let { info ->
+                                        detectedDeviceId = info.deviceId
                                         firmwareText = info.firmwareFormatted()
                                         batteryText = info.batteryFormatted()
-                                        onLog("手柄信息: devId=${info.deviceId}, FW=$firmwareText, 电量=$batteryText")
+                                        val ftOk = info.deviceId in Apex5Protocol.APEX5_DEVICE_IDS
+                                        onLog("手柄信息: devId=${info.deviceId}(${if (ftOk) "Apex5力反馈扳机" else "标准V2"}), FW=$firmwareText, 电量=$batteryText")
                                         onMetadata(enhancedStreamActive, firmwareText, batteryText)
+                                        onTriggerCapabilities(ftOk, onboardSummaryText)
+                                        if (ftOk && !initialOnboardRequested) {
+                                            initialOnboardRequested = true
+                                            pendingOnboardRead.set(true)
+                                        }
                                     }
                                 }
 
@@ -483,6 +695,43 @@ class Apex5UsbSession(
                                             tmp[hdrOff + 2], allowThirdParty, Apex5Protocol.hexPreview(tmp, copyLen, 12)
                                         ))
                                     }
+                                }
+
+                                Apex5Protocol.CMD_MAP_STATUS -> {
+                                    Apex5Protocol.parseMapStatusActiveSlot(tmp, copyLen)?.let { activeSlot ->
+                                        activeOnboardSlot = activeSlot
+                                        onLog("读取板载槽位 #${activeSlot + 1}，正在拉取 PC 空间站扳机预设...")
+                                        hidOutEp?.let { ep ->
+                                            pendingOutQueue.offer(ep to Apex5Protocol.buildMapReadCmd(activeSlot, 20))
+                                        }
+                                    }
+                                }
+
+                                Apex5Protocol.CMD_MAP_READ -> {
+                                    Apex5Protocol.parseMapReadChunk(tmp, copyLen)?.let { chunk ->
+                                        if (chunk.total in 1..64 && chunk.index in 0 until chunk.total) {
+                                            if (onboardBlob == null || onboardTotalChunks != chunk.total) {
+                                                onboardTotalChunks = chunk.total
+                                                onboardBlob = ByteArray(chunk.total * 20)
+                                                onboardChunkSeen = BooleanArray(chunk.total)
+                                            }
+                                            val blob = onboardBlob!!
+                                            val seen = onboardChunkSeen!!
+                                            val dstOff = chunk.index * 20
+                                            if (dstOff + 20 <= blob.size) {
+                                                System.arraycopy(chunk.payload20, 0, blob, dstOff, 20)
+                                                seen[chunk.index] = true
+                                            }
+                                            finalizeOnboardBlob(now)
+                                        }
+                                    }
+                                }
+
+                                Apex5Protocol.CMD_CHECK_ARCH,
+                                Apex5Protocol.CMD_ACQUIRE,
+                                Apex5Protocol.CMD_SET_FORCE_TRIGGER,
+                                Apex5Protocol.CMD_SET_FORCE_TRIGGER_GRIP -> {
+                                    // Expected ACKs for V2 handshake & force-trigger commands
                                 }
 
                                 else -> {
@@ -518,6 +767,18 @@ class Apex5UsbSession(
             if (running.get() && !slot.request.queue(slot.buffer)) {
                 exitReason = "USB 设备已断开"
                 break
+            }
+        }
+
+        // Release mechanical trigger locks / force resistance cleanly when stopping driver
+        if (isForceTriggerSupported()) {
+            hidOutEp?.let { ep ->
+                runCatching {
+                    val leftNorm = Apex5Protocol.buildForceTriggerNormalCmd(Apex5Protocol.TRIGGER_SIDE_LEFT)
+                    val rightNorm = Apex5Protocol.buildForceTriggerNormalCmd(Apex5Protocol.TRIGGER_SIDE_RIGHT)
+                    conn.bulkTransfer(ep, leftNorm, leftNorm.size, 60)
+                    conn.bulkTransfer(ep, rightNorm, rightNorm.size, 60)
+                }
             }
         }
 

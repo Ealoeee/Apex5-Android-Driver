@@ -257,6 +257,9 @@ class ApexDriverService : Service() {
                 val modeDesc = if (enhanced) "$outDesc | 0xEF 增强" else "$outDesc | XInput"
                 updateNotification("$modeDesc | 电量 $battery")
             },
+            onTriggerCapabilities = { ftSupported, onboardSummary ->
+                DriverController.updateTriggerCapabilities(ftSupported, onboardSummary)
+            },
             onLog = { msg -> DriverController.appendLog(msg) },
             onDisconnected = { reason ->
                 DriverController.appendLog("USB 会话结束: $reason")
@@ -281,11 +284,10 @@ class ApexDriverService : Service() {
             }.start()
         }
         DriverController.onTriggerRumbleTestRequested = { lt, rt ->
-            Thread {
-                session.sendRumble(0, 0, forceTriggerL = lt, forceTriggerR = rt)
-                Thread.sleep(240)
-                session.sendRumble(0, 0, forceTriggerL = 0, forceTriggerR = 0)
-            }.start()
+            session.triggerForceTriggerPulse(maxOf(lt, rt))
+        }
+        DriverController.onSyncOnboardTriggersRequested = {
+            session.requestSyncOnboardTriggers()
         }
 
         rumbleThread = Thread({
@@ -329,6 +331,7 @@ class ApexDriverService : Service() {
         }
         DriverController.onRumbleTestRequested = null
         DriverController.onTriggerRumbleTestRequested = null
+        DriverController.onSyncOnboardTriggersRequested = null
         usbSession?.stop()
         usbSession = null
 

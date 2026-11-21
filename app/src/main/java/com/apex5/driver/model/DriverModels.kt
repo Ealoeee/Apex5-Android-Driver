@@ -100,11 +100,13 @@ data class StickTuningConfig(
 )
 
 enum class TriggerHapticMode(val label: String, val shortLabel: String) {
-    OFF("常规线性 (无力反馈震动)", "常规"),
-    SYNC_MAIN("跟随游戏握把震动", "跟随震动"),
-    SNIPER_CLICK("狙击破阻感 (半程清脆脉冲)", "狙击"),
-    MACHINE_GUN("机枪高频连震 (按住连振)", "机枪"),
-    RACING_PROGRESSIVE("赛车引擎渐进震动", "赛车")
+    OFF("常规线性 (无阻力)", "常规"),
+    FOLLOW_ONBOARD("同步 PC 板载预设 (读取手柄存储)", "PC板载"),
+    SYNC_MAIN("跟随游戏震动联动 (0x52 握把映射)", "跟随震动"),
+    SNIPER_CLICK("狙击破阻感 (行程破阻回弹)", "狙击"),
+    MACHINE_GUN("机枪高频连振 (扣压后连震)", "机枪"),
+    RACING_PROGRESSIVE("赛车阻尼 (持续液压阻力)", "赛车"),
+    TRIGGER_LOCK("扳机锁 (物理硬限位 · FPS 秒开枪)", "扳机锁")
 }
 
 data class TriggerTuningConfig(
@@ -112,7 +114,9 @@ data class TriggerTuningConfig(
     val deadzoneEndPercent: Int = 0,
     val hairTriggerMode: Boolean = false,
     val hapticMode: TriggerHapticMode = TriggerHapticMode.OFF,
-    val hapticStrengthPercent: Int = 75
+    val hapticStrengthPercent: Int = 75,
+    val startTravelPercent: Int = 25,
+    val frequencyPercent: Int = 45
 )
 
 data class GamepadMacroStep(
@@ -307,6 +311,8 @@ data class DriverStatus(
     val overlayRunning: Boolean = false,
     val deviceSummary: String = "未检测到手柄",
     val enhancedActive: Boolean = false,
+    val forceTriggerSupported: Boolean = false,
+    val onboardTriggerSummary: String = "未读取板载配置 (启动驱动后自动读取手柄槽位)",
     val firmwareText: String = "--",
     val batteryText: String = "--",
     val shizukuState: ShizukuState = ShizukuState.STOPPED,

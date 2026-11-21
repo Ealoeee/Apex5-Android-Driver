@@ -20,6 +20,7 @@ import com.apex5.driver.model.LiveControllerState
 import com.apex5.driver.model.ShizukuState
 import com.apex5.driver.model.SpaceStationPreset
 import com.apex5.driver.model.TouchProfile
+import com.apex5.driver.model.TriggerHapticMode
 import com.apex5.driver.overlay.FloatingOverlayService
 import com.apex5.driver.shizuku.ShizukuBridge
 import com.apex5.driver.usb.Apex5Protocol
@@ -52,6 +53,9 @@ object DriverController {
 
     @Volatile
     var onTriggerRumbleTestRequested: ((Int, Int) -> Unit)? = null
+
+    @Volatile
+    var onSyncOnboardTriggersRequested: (() -> Unit)? = null
 
     fun init(context: Context) {
         if (initialized) {
@@ -331,6 +335,17 @@ object DriverController {
         onTriggerRumbleTestRequested?.invoke(210, 210)
     }
 
+    fun syncOnboardTriggers(context: Context) {
+        updateConfig(context) { cur ->
+            cur.copy(
+                leftTrigger = cur.leftTrigger.copy(hapticMode = TriggerHapticMode.FOLLOW_ONBOARD),
+                rightTrigger = cur.rightTrigger.copy(hapticMode = TriggerHapticMode.FOLLOW_ONBOARD)
+            )
+        }
+        onSyncOnboardTriggersRequested?.invoke()
+        appendLog("已切换为「同步 PC 板载预设」并向手柄请求最新槽位配置 (0xA1/0xA3)")
+    }
+
     fun applySpaceStationPreset(context: Context, preset: SpaceStationPreset) {
         updateConfig(context) { cur ->
             ConfigStore.applySpaceStationPreset(cur, preset)
@@ -375,6 +390,7 @@ object DriverController {
                 ffSupported = ffSupported,
                 extraDeviceActive = extraDeviceActive,
                 enhancedActive = if (running) it.enhancedActive else false,
+                forceTriggerSupported = if (running) it.forceTriggerSupported else false,
                 liveState = if (running) it.liveState else LiveControllerState()
             )
         }
@@ -386,6 +402,15 @@ object DriverController {
                 enhancedActive = enhancedActive,
                 firmwareText = fw,
                 batteryText = battery
+            )
+        }
+    }
+
+    internal fun updateTriggerCapabilities(forceTriggerSupported: Boolean, onboardSummary: String) {
+        _status.update {
+            it.copy(
+                forceTriggerSupported = forceTriggerSupported,
+                onboardTriggerSummary = onboardSummary
             )
         }
     }

@@ -37,8 +37,8 @@ android {
         applicationId = "com.apex5.driver"
         minSdk = 28
         targetSdk = 35
-        versionCode = 6
-        versionName = "0.5.1"
+        versionCode = 7
+        versionName = "0.5.2"
 
         ndk {
             abiFilters += listOf("arm64-v8a", "armeabi-v7a")

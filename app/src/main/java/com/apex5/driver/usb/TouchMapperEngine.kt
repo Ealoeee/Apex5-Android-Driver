@@ -60,6 +60,9 @@ class TouchMapperEngine {
     private val prevSlotX = IntArray(MAX_SLOTS)
     private val prevSlotY = IntArray(MAX_SLOTS)
     private val currentSlots = Array(MAX_SLOTS) { SlotOutput() }
+    private val evalOutputs = ArrayList<SlotOutput>(24)
+    private val releasedThisFrame = BooleanArray(MAX_SLOTS)
+    private val validIdScratch = HashSet<String>(32)
 
     private val cameraRuntimes = HashMap<String, CameraSwipeRuntime>()
     private val joystickRuntimes = HashMap<String, JoystickRuntime>()
@@ -68,6 +71,7 @@ class TouchMapperEngine {
     private val slotOwner = arrayOfNulls<String>(MAX_SLOTS)
     private val suppressedSingleInputs = HashSet<ControllerInputSource>()
 
+    private var nextSlotCursor = 0
     private var lastFrameNs = 0L
     private var lastEmitNs = 0L
 
@@ -81,9 +85,11 @@ class TouchMapperEngine {
         prevSlotActive.fill(false)
         prevSlotX.fill(0)
         prevSlotY.fill(0)
+        releasedThisFrame.fill(false)
         for (s in currentSlots) {
             s.active = false
         }
+        nextSlotCursor = 0
         lastFrameNs = 0L
         lastEmitNs = 0L
     }
@@ -104,15 +110,21 @@ class TouchMapperEngine {
         for (s in currentSlots) {
             s.active = false
         }
+        releasedThisFrame.fill(false)
 
-        // Cleanup stale node owners
-        val validIds = HashSet<String>(profile.nodes.size)
-        for (n in profile.nodes) validIds.add(n.id)
+        var discreteTransition = false
+
+        // Cleanup stale node owners removed from profile
+        validIdScratch.clear()
+        val nodes = profile.nodes
+        for (n in nodes) validIdScratch.add(n.id)
         for (slot in 0 until MAX_SLOTS) {
             val owner = slotOwner[slot]
-            if (owner != null && owner !in validIds) {
+            if (owner != null && owner !in validIdScratch) {
                 slotOwner[slot] = null
                 nodeSlotMap.remove(owner)
+                releasedThisFrame[slot] = true
+                discreteTransition = true
             }
         }
 
@@ -125,22 +137,59 @@ class TouchMapperEngine {
 
         // Suppress plain single-key triggers when an active combo trigger uses the same primary input
         suppressedSingleInputs.clear()
-        for (node in profile.nodes) {
+        for (node in nodes) {
             val mod = node.modifierInput
             if (mod != null && isInputPressed(mod, raw) && isInputPressed(node.input, raw)) {
                 suppressedSingleInputs.add(node.input)
             }
         }
 
-        var discreteTransition = false
+        // 1) Evaluate ALL nodes in profile without truncation (even if >10 nodes exist)
+        while (evalOutputs.size < nodes.size) {
+            evalOutputs.add(SlotOutput())
+        }
+        for (i in nodes.indices) {
+            val out = evalOutputs[i]
+            out.active = false
+            evaluateNode(nodes[i], raw, config, gyroAimActive, dtSec, nowNs, out)
+        }
 
-        for (node in profile.nodes) {
-            val slot = allocateSlot(node.id) ?: continue
-            val out = currentSlots[slot]
-            evaluateNode(node, raw, config, gyroAimActive, dtSec, nowNs, out)
-            if (out.active != prevSlotActive[slot]) {
-                discreteTransition = true
+        // 2) Release slots for nodes that became inactive
+        for (i in nodes.indices) {
+            val nodeId = nodes[i].id
+            if (!evalOutputs[i].active) {
+                val heldSlot = nodeSlotMap.remove(nodeId)
+                if (heldSlot != null) {
+                    slotOwner[heldSlot] = null
+                    releasedThisFrame[heldSlot] = true
+                    discreteTransition = true
+                }
             }
+        }
+
+        // 3) Keep slots for already-active owners untouched
+        for (i in nodes.indices) {
+            val out = evalOutputs[i]
+            if (!out.active) continue
+            val heldSlot = nodeSlotMap[nodes[i].id] ?: continue
+            val slotOut = currentSlots[heldSlot]
+            slotOut.active = true
+            slotOut.x = out.x
+            slotOut.y = out.y
+        }
+
+        // 4) Dynamically assign free slots to newly active nodes (skip slots released this frame first, round-robin LRU)
+        for (i in nodes.indices) {
+            val out = evalOutputs[i]
+            if (!out.active) continue
+            val nodeId = nodes[i].id
+            if (nodeSlotMap.containsKey(nodeId)) continue
+            val assigned = allocateFreeSlot(nodeId) ?: continue
+            val slotOut = currentSlots[assigned]
+            slotOut.active = true
+            slotOut.x = out.x
+            slotOut.y = out.y
+            discreteTransition = true
         }
 
         if (!discreteTransition && (nowNs - lastEmitNs) < MIN_PACKET_INTERVAL_NS) {
@@ -173,15 +222,25 @@ class TouchMapperEngine {
         return outBytes
     }
 
-    private fun allocateSlot(nodeId: String): Int? {
-        nodeSlotMap[nodeId]?.let { existing ->
-            return existing
+    private fun allocateFreeSlot(nodeId: String): Int? {
+        // First pass: prefer slots NOT released in this same frame so tracking IDs never collide across frames
+        for (offset in 0 until MAX_SLOTS) {
+            val slot = (nextSlotCursor + offset) % MAX_SLOTS
+            if (slotOwner[slot] == null && !releasedThisFrame[slot]) {
+                slotOwner[slot] = nodeId
+                nodeSlotMap[nodeId] = slot
+                nextSlotCursor = (slot + 1) % MAX_SLOTS
+                return slot
+            }
         }
-        for (i in 0 until MAX_SLOTS) {
-            if (slotOwner[i] == null) {
-                slotOwner[i] = nodeId
-                nodeSlotMap[nodeId] = i
-                return i
+        // Fallback pass: all 10 slots were active or released this frame
+        for (offset in 0 until MAX_SLOTS) {
+            val slot = (nextSlotCursor + offset) % MAX_SLOTS
+            if (slotOwner[slot] == null) {
+                slotOwner[slot] = nodeId
+                nodeSlotMap[nodeId] = slot
+                nextSlotCursor = (slot + 1) % MAX_SLOTS
+                return slot
             }
         }
         return null
@@ -425,8 +484,8 @@ class TouchMapperEngine {
 
     private fun isInputPressed(input: ControllerInputSource, raw: MutableRawFrame): Boolean {
         return when (input) {
-            ControllerInputSource.LEFT_STICK -> hypot(raw.lx.toFloat(), raw.ly.toFloat()) > 16000f
-            ControllerInputSource.RIGHT_STICK -> hypot(raw.rx.toFloat(), raw.ry.toFloat()) > 16000f
+            ControllerInputSource.LEFT_STICK -> hypot(raw.lx.toFloat(), raw.ly.toFloat()) > 10000f
+            ControllerInputSource.RIGHT_STICK -> hypot(raw.rx.toFloat(), raw.ry.toFloat()) > 10000f
             ControllerInputSource.A -> raw.a
             ControllerInputSource.B -> raw.b
             ControllerInputSource.X -> raw.x

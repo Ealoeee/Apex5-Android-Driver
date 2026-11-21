@@ -2,6 +2,19 @@
 
 All notable changes to **Apex5-Android-Driver** are documented in this file.
 
+## [v0.5.2] - 2026-11-22
+
+### Fixed
+- **修复新增触屏键位（方向键 ↑↓←→、右摇杆及第 10 个以后的键位）实战失效问题 (`TouchMapperEngine`)**：
+  - 修复旧版按方案节点列表顺序静态预分配 `0..9` 共 10 个 `ABS_MT_SLOT` 的缺陷（内置方案已占满 10–11 槽，导致所有新增按键、方向键或右摇杆因 `slot == null` 被直接丢弃，而编辑器「测试」仅读取手柄原始输入所以显示正常）。
+  - 重构为**按帧动态槽位分配**：全量评估方案中所有节点，仅给当前**真实按下/激活**的键位分配空闲触控槽，松手立即释放并采用轮转退避避免 Linux `ABS_MT_TRACKING_ID` 同帧碰撞；同步将摇杆作为点击按键触发的阈值从 `16000` 优化至 `10000`。
+
+### Added
+- **八爪鱼 5 飞智 V2 `0x51`/`0x52` 伺服力反馈扳机协议 & PC 空间站板载预设读取 (`0xA1`/`0xA3`)**：
+  - 彻底解决 PC 空间站设置的力反馈扳机接上安卓即失效的原因（八爪鱼 5 断电/重连 USB 后会清空实时伺服状态，且旧版 `0x12 CMD_HAPTIC` 仅控制传统振动马达）。
+  - 在 [`Apex5Protocol`](app/src/main/java/com/apex5/driver/usb/Apex5Protocol.kt) 与 [`Apex5UsbSession`](app/src/main/java/com/apex5/driver/usb/Apex5UsbSession.kt) 中实现原生 `0x51`（常规 / 赛车 / 机枪 / 狙击破阻 / 扳机锁）/ `0x52`（跟随握把）控制指令及断开自动解锁，并在启动驱动时自动读取手柄板载当前槽位 (`0xA1`/`0xA3`) 同步 LT/RT 参数。
+  - 在「摇杆与扳机」面板新增 **力反馈扳机状态与一键同步 PC 板载预设** 卡片，新增「扳机锁 (`TRIGGER_LOCK`)」「同步 PC 板载 (`FOLLOW_ONBOARD`)」及 **起步行程 / 阻力强度 / 震动频率** 独立滑块。
+
 ## [v0.5.1] - 2026-11-20
 
 ### Added

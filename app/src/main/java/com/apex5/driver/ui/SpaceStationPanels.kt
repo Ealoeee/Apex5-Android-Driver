@@ -96,7 +96,8 @@ internal fun StickAndTriggerSpaceView(
     config: DriverConfig,
     isWide: Boolean,
     onUpdateConfig: ((DriverConfig) -> DriverConfig) -> Unit,
-    onTestTriggerRumble: () -> Unit
+    onTestTriggerRumble: () -> Unit,
+    onSyncOnboardTriggers: () -> Unit
 ) {
     val live = status.liveState
     var editingLeftStick by remember { mutableStateOf(true) }
@@ -289,10 +290,58 @@ internal fun StickAndTriggerSpaceView(
             stickControlsCard(Modifier.fillMaxWidth())
         }
 
-        // Row 2: Left & Right Trigger Haptic & Travel Cards
+        // Row 2: Apex 5 Force Trigger Hardware Status & PC Onboard Sync Banner
+        BentoCard(highlighted = status.forceTriggerSupported, accent = Apex5Palette.Violet) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                BentoSectionHeader(
+                    title = "Apex 5 自适应力反馈扳机引擎 (0x51 / 0x52)",
+                    subtitle = "八爪鱼 5 固件在断电/重连后会自动复位伺服阻力，需由安卓驱动主动读取并下发指令唤醒",
+                    icon = Icons.Rounded.Bolt,
+                    accent = Apex5Palette.Violet,
+                    trailing = {
+                        StatusPillBadge(
+                            text = when {
+                                !status.serviceRunning -> "驱动未启动"
+                                status.forceTriggerSupported -> "伺服引擎就绪"
+                                else -> "兼容 V2 马达"
+                            },
+                            color = when {
+                                !status.serviceRunning -> Apex5Palette.TextMuted
+                                status.forceTriggerSupported -> Apex5Palette.Emerald
+                                else -> Apex5Palette.Amber
+                            }
+                        )
+                    }
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "PC 空间站板载记忆：${status.onboardTriggerSummary}",
+                        color = Apex5Palette.TextSecondary,
+                        fontSize = 11.5.sp,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Spacer(Modifier.width(10.dp))
+                    OutlinedButton(
+                        onClick = onSyncOnboardTriggers,
+                        modifier = Modifier.height(34.dp),
+                        contentPadding = PaddingValues(horizontal = 10.dp)
+                    ) {
+                        Icon(Icons.Rounded.Refresh, contentDescription = null, tint = Apex5Palette.Cyan, modifier = Modifier.size(14.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("一键同步 PC 板载", color = Apex5Palette.Cyan, fontSize = 11.5.sp)
+                    }
+                }
+            }
+        }
+
+        // Row 3: Left & Right Trigger Haptic & Travel Cards
         val leftTrigCard: @Composable (Modifier) -> Unit = { mod ->
             TriggerSpaceCard(
-                title = "LT 左扳机行程与力反馈马达",
+                title = "LT 左扳机行程与力反馈伺服",
                 triggerCfg = config.leftTrigger,
                 liveRaw = live.lt,
                 accent = Apex5Palette.Cyan,
@@ -304,7 +353,7 @@ internal fun StickAndTriggerSpaceView(
         }
         val rightTrigCard: @Composable (Modifier) -> Unit = { mod ->
             TriggerSpaceCard(
-                title = "RT 右扳机行程与力反馈马达",
+                title = "RT 右扳机行程与力反馈伺服",
                 triggerCfg = config.rightTrigger,
                 liveRaw = live.rt,
                 accent = Apex5Palette.Violet,
@@ -433,7 +482,7 @@ private fun TriggerSpaceCard(
         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
             BentoSectionHeader(
                 title = title,
-                subtitle = "支持扳机锁速射、独立行程死区及飞智 0x12 扳机马达波形",
+                subtitle = "支持 0x51/0x52 真实力反馈伺服阻力、物理扳机锁与独立死区行程",
                 icon = Icons.Rounded.Bolt,
                 accent = accent,
                 trailing = {
@@ -479,7 +528,7 @@ private fun TriggerSpaceCard(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Column(modifier = Modifier.weight(1f)) {
-                    Text("快速触发模式 (软件扳机锁 / Hair-Trigger)", color = Apex5Palette.TextPrimary, fontSize = 13.sp)
+                    Text("快速触发模式 (软件快扳 / Hair-Trigger)", color = Apex5Palette.TextPrimary, fontSize = 13.sp)
                     Text("超过起点死区即瞬间输出 100% 满压，适合 FPS 点射/开镜", color = Apex5Palette.TextMuted, fontSize = 11.sp)
                 }
                 Switch(
@@ -510,22 +559,54 @@ private fun TriggerSpaceCard(
             )
 
             SleekDropdownRow(
-                label = "扳机力反馈模式 (0x12 马达)",
+                label = "力反馈伺服模式 (0x51/0x52)",
                 currentText = triggerCfg.hapticMode.label,
                 options = TriggerHapticMode.entries.map { it.label to it },
                 onSelect = { mode -> onUpdate { it.copy(hapticMode = mode) } }
             )
 
-            if (triggerCfg.hapticMode != TriggerHapticMode.OFF) {
+            if (triggerCfg.hapticMode == TriggerHapticMode.FOLLOW_ONBOARD) {
+                Text(
+                    text = "当前处于「PC 板载预设」跟随模式：驱动将直接读取手柄内置槽位中的力反馈参数并实时下发唤醒伺服电机。",
+                    color = Apex5Palette.Cyan,
+                    fontSize = 11.sp
+                )
+            } else if (triggerCfg.hapticMode != TriggerHapticMode.OFF) {
                 CompactParamSlider(
-                    label = "扳机反馈波形力度",
-                    valueText = "${triggerCfg.hapticStrengthPercent}%",
-                    value = triggerCfg.hapticStrengthPercent.toFloat(),
-                    range = 10f..100f,
+                    label = if (triggerCfg.hapticMode == TriggerHapticMode.TRIGGER_LOCK) "物理限位挡点行程" else "力反馈介入起点行程",
+                    valueText = "${triggerCfg.startTravelPercent}%",
+                    value = triggerCfg.startTravelPercent.toFloat(),
+                    range = 0f..90f,
                     steps = 17,
                     accent = accent,
-                    onValueChange = { v -> onUpdate { it.copy(hapticStrengthPercent = v.roundToInt()) } }
+                    onValueChange = { v -> onUpdate { it.copy(startTravelPercent = v.roundToInt()) } }
                 )
+
+                if (triggerCfg.hapticMode != TriggerHapticMode.TRIGGER_LOCK) {
+                    CompactParamSlider(
+                        label = "伺服阻力 / 震动强度",
+                        valueText = "${triggerCfg.hapticStrengthPercent}%",
+                        value = triggerCfg.hapticStrengthPercent.toFloat(),
+                        range = 10f..100f,
+                        steps = 17,
+                        accent = accent,
+                        onValueChange = { v -> onUpdate { it.copy(hapticStrengthPercent = v.roundToInt()) } }
+                    )
+                }
+
+                if (triggerCfg.hapticMode == TriggerHapticMode.MACHINE_GUN ||
+                    triggerCfg.hapticMode == TriggerHapticMode.SYNC_MAIN
+                ) {
+                    CompactParamSlider(
+                        label = "高频连振 / 脉冲频率",
+                        valueText = "${triggerCfg.frequencyPercent}%",
+                        value = triggerCfg.frequencyPercent.toFloat(),
+                        range = 10f..100f,
+                        steps = 17,
+                        accent = accent,
+                        onValueChange = { v -> onUpdate { it.copy(frequencyPercent = v.roundToInt()) } }
+                    )
+                }
             }
         }
     }

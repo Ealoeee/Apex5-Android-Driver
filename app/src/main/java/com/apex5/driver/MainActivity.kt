@@ -92,6 +92,7 @@ class MainActivity : ComponentActivity() {
                     onClearLogs = { DriverController.clearLogs() },
                     onTestRumble = { DriverController.triggerTestRumble() },
                     onTestTriggerRumble = { DriverController.triggerTestTriggerRumble() },
+                    onSyncOnboardTriggers = { DriverController.syncOnboardTriggers(this) },
                     onApplySpacePreset = { preset -> DriverController.applySpaceStationPreset(this, preset) },
                     onExportSpaceJson = { DriverController.exportSpaceStationConfigJson() },
                     onImportSpaceJson = { json -> DriverController.importSpaceStationConfigJson(this, json) },

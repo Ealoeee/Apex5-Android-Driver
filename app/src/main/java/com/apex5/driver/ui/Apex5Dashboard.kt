@@ -128,6 +128,7 @@ fun Apex5Dashboard(
     onClearLogs: () -> Unit,
     onTestRumble: () -> Unit,
     onTestTriggerRumble: () -> Unit,
+    onSyncOnboardTriggers: () -> Unit,
     onApplySpacePreset: (SpaceStationPreset) -> Unit,
     onExportSpaceJson: () -> String,
     onImportSpaceJson: (String) -> Result<DriverConfig>,
@@ -208,6 +209,7 @@ fun Apex5Dashboard(
                             onClearLogs = onClearLogs,
                             onTestRumble = onTestRumble,
                             onTestTriggerRumble = onTestTriggerRumble,
+                            onSyncOnboardTriggers = onSyncOnboardTriggers,
                             onApplySpacePreset = onApplySpacePreset,
                             onExportSpaceJson = onExportSpaceJson,
                             onImportSpaceJson = onImportSpaceJson,
@@ -268,6 +270,7 @@ fun Apex5Dashboard(
                         onClearLogs = onClearLogs,
                         onTestRumble = onTestRumble,
                         onTestTriggerRumble = onTestTriggerRumble,
+                        onSyncOnboardTriggers = onSyncOnboardTriggers,
                         onApplySpacePreset = onApplySpacePreset,
                         onExportSpaceJson = onExportSpaceJson,
                         onImportSpaceJson = onImportSpaceJson,
@@ -805,6 +808,7 @@ private fun DashboardTabBody(
     onClearLogs: () -> Unit,
     onTestRumble: () -> Unit,
     onTestTriggerRumble: () -> Unit,
+    onSyncOnboardTriggers: () -> Unit,
     onApplySpacePreset: (SpaceStationPreset) -> Unit,
     onExportSpaceJson: () -> String,
     onImportSpaceJson: (String) -> Result<DriverConfig>,
@@ -839,7 +843,8 @@ private fun DashboardTabBody(
             config = config,
             isWide = isWide,
             onUpdateConfig = onUpdateConfig,
-            onTestTriggerRumble = onTestTriggerRumble
+            onTestTriggerRumble = onTestTriggerRumble,
+            onSyncOnboardTriggers = onSyncOnboardTriggers
         )
         NavTab.BUTTONS_MACROS -> ButtonsMacrosSpaceView(
             status = status,
